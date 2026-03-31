@@ -196,6 +196,76 @@ commander/
 
 ---
 
+## 竞品分析：cmux（2026-03 新增）
+
+> cmux (cmux.com) — 基于 Ghostty/libghostty 的原生 macOS 终端，专为多 AI agent 并行打造。开源，Mitchell Hashimoto 推荐，HN #2，日本开发者社区病毒传播。
+
+### cmux 核心特性
+
+| 特性 | 说明 |
+|------|------|
+| 垂直标签页 | 侧边栏显示 git 分支、工作目录、端口、通知文本 |
+| 通知提醒环 | Agent 需要关注时标签页亮灯（OSC 9/99/777 + `cmux notify` CLI） |
+| 内置浏览器 | 终端旁分屏，可编程 API，查看 PR/dev server |
+| 分屏面板 | 水平+垂直分屏 |
+| Socket API / CLI | 完整编程接口：创建 workspace/tab、分屏、发送按键、打开 URL |
+| GPU 加速 | libghostty 渲染 |
+| 原生轻量 | Swift + AppKit，无 Electron |
+
+### Commander vs cmux：定位差异
+
+| 维度 | Commander | cmux |
+|------|-----------|------|
+| **本质** | 调度大脑（该看哪个、该做什么） | 终端容器（所有窗口在一个地方） |
+| **隐喻** | 皇帝批阅奏章 | tmux 升级版 |
+| **状态语义** | 丰富状态机（started→waiting→completed→dismissed/starred） | 二值通知（亮/不亮） |
+| **目标绑定** | 会话关联 Vibeflow 项目/年度目标 | 无，纯终端 |
+| **跨工具** | 插件架构，接 GitLab/IM/CI | 只管终端内 agent |
+| **批阅流** | d 已处理、s 收藏、n 待总结，可回溯 | 无，点标签页切换 |
+| **内置浏览器** | 无 | 有，可编程 |
+| **分屏** | 无（TUI 单面板） | 有 |
+
+**结论：不是竞品，是互补。cmux 解决"终端在哪里"，Commander 解决"该看哪个"。**
+
+### 从 cmux 借鉴的想法
+
+1. **Socket API 作为跳转通道**
+   - Commander 当前跳转方案是"激活 CatPaw 窗口 + 复制 resume 命令到剪贴板"，笨拙
+   - 如果用户用 cmux 作为终端，Commander 可通过 `cmux` CLI/socket 直接跳转到对应 workspace/surface，体验更丝滑
+   - **行动项**：Commander 的 `jump()` action 应该支持多种跳转后端（CatPaw AppleScript / cmux socket / iTerm2 等），做成可插拔
+
+2. **通知标准化：OSC 终端序列**
+   - cmux 用 OSC 9/99/777 检测 agent 通知，这是终端标准协议
+   - Commander 的 hook 事件采集也可以兼容这个协议，不仅仅靠 JSONL
+   - 好处：即使用户不装 Commander hook，只要终端支持 OSC，也能有基本的状态感知
+
+3. **内置浏览器的需求验证**
+   - cmux 用户高频使用场景：一边 agent 一边看 PR/dev server
+   - Commander Phase 3 可考虑内联浏览器面板，或至少支持 `b` 快捷键打开关联 URL（MR 链接、部署预览）
+
+4. **cmux 作为 Commander 的宿主终端**
+   - 最佳组合：cmux 负责终端渲染+分屏+浏览器，Commander 作为 cmux 内的一个 workspace 提供调度视图
+   - Commander 通过 cmux socket API 控制其他 workspace（创建、跳转、发送命令）
+   - 这样 Commander 不需要自己做终端渲染，专注调度逻辑
+
+### 对 Commander 技术方案的影响
+
+插件的 `jump()` action 应改为：
+
+```typescript
+interface JumpTarget {
+  type: 'cmux' | 'catpaw' | 'iterm2' | 'terminal';
+  // cmux: cmux select-workspace + select-surface
+  // catpaw: AppleScript 激活窗口
+  // iterm2: AppleScript
+  // terminal: 直接在当前终端 resume
+}
+```
+
+MVP 仍以 CatPaw/通用终端 为默认跳转后端，cmux 作为可选增强。
+
+---
+
 ## 非目标（MVP 不做）
 
 - 不做跨机器同步
