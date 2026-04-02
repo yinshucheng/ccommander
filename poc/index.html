@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Vibeflow Dashboard</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+  <style>
+    body { background: #0f172a; color: #e2e8f0; font-family: -apple-system, system-ui, sans-serif; }
+    .card { background: #1e293b; border-radius: 12px; border: 1px solid #334155; }
+    .tag-work { background: #1e3a5f; color: #7dd3fc; }
+    .tag-side-project { background: #3b1f5e; color: #c4b5fd; }
+    .tag-output { background: #5f1e1e; color: #fca5a5; }
+    .status-done { color: #4ade80; }
+    .status-in_progress { color: #facc15; }
+    .status-todo { color: #94a3b8; }
+    .priority-critical { border-left: 3px solid #ef4444; }
+    .priority-high { border-left: 3px solid #f97316; }
+    .priority-medium { border-left: 3px solid #3b82f6; }
+    .priority-low { border-left: 3px solid #6b7280; }
+  </style>
+</head>
+<body class="min-h-screen p-4 md:p-8">
+  <div class="max-w-5xl mx-auto">
+    <!-- Header -->
+    <div class="flex items-center justify-between mb-6">
+      <div>
+        <h1 class="text-2xl font-bold text-white">Vibeflow</h1>
+        <p class="text-sm text-slate-400" id="update-time"></p>
+      </div>
+      <div class="text-right">
+        <p class="text-3xl font-bold text-white" id="date-display"></p>
+      </div>
+    </div>
+
+    <!-- Top Row: Pomodoro + Screen Time -->
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+      <!-- Pomodoro Progress -->
+      <div class="card p-5">
+        <div class="flex items-center justify-between mb-3">
+          <h2 class="text-lg font-semibold">Pomodoro</h2>
+          <span class="text-2xl font-bold" id="pomo-count"></span>
+        </div>
+        <div class="w-full bg-slate-700 rounded-full h-3 mb-4">
+          <div class="bg-red-500 h-3 rounded-full transition-all" id="pomo-bar"></div>
+        </div>
+        <div class="space-y-2" id="pomo-history"></div>
+      </div>
+
+      <!-- Screen Time -->
+      <div class="card p-5">
+        <div class="flex items-center justify-between mb-3">
+          <h2 class="text-lg font-semibold">Screen Time</h2>
+          <span class="text-2xl font-bold" id="screen-total"></span>
+        </div>
+        <div class="space-y-2" id="screen-breakdown"></div>
+      </div>
+    </div>
+
+    <!-- Tasks -->
+    <div class="card p-5 mb-4">
+      <div class="flex items-center justify-between mb-3">
+        <h2 class="text-lg font-semibold">Tasks</h2>
+        <div class="flex gap-2 text-xs">
+          <span class="status-done">Done</span>
+          <span class="status-in_progress">In Progress</span>
+          <span class="status-todo">Todo</span>
+        </div>
+      </div>
+      <div class="space-y-2" id="task-list"></div>
+    </div>
+
+    <!-- Weekly Charts -->
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div class="card p-5">
+        <h2 class="text-lg font-semibold mb-3">Weekly Pomodoros</h2>
+        <canvas id="chart-pomodoros" height="160"></canvas>
+      </div>
+      <div class="card p-5">
+        <h2 class="text-lg font-semibold mb-3">Weekly Screen Time</h2>
+        <canvas id="chart-screentime" height="160"></canvas>
+      </div>
+    </div>
+
+    <!-- Footer -->
+    <p class="text-center text-xs text-slate-500 mt-6">Skill UI POC — data from vibeflow-data.json</p>
+  </div>
+
+  <script>
+    async function load() {
+      const res = await fetch('./vibeflow-data.json');
+      const d = await res.json();
+      render(d);
+    }
+
+    function render(d) {
+      const today = d.today;
+
+      // Header
+      document.getElementById('date-display').textContent = today.date;
+      document.getElementById('update-time').textContent =
+        'Updated ' + new Date(d.updated_at).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+
+      // Pomodoro
+      const pomo = today.pomodoros;
+      document.getElementById('pomo-count').textContent = `${pomo.completed}/${pomo.target}`;
+      document.getElementById('pomo-bar').style.width = `${(pomo.completed / pomo.target) * 100}%`;
+
+      const historyHtml = pomo.history.map(h => `
+        <div class="flex items-center justify-between text-sm">
+          <div class="flex items-center gap-2">
+            <span class="text-red-400">&#x1F345;</span>
+            <span>${h.title}</span>
+            <span class="px-1.5 py-0.5 rounded text-xs tag-${h.tag}">${h.tag}</span>
+          </div>
+          <span class="text-slate-400">${h.completed_at}</span>
+        </div>
+      `).join('');
+      document.getElementById('pomo-history').innerHTML = historyHtml;
+
+      // Screen Time
+      const st = today.screen_time;
+      const hours = Math.floor(st.total_min / 60);
+      const mins = st.total_min % 60;
+      document.getElementById('screen-total').textContent = `${hours}h${mins}m`;
+
+      const maxMin = Math.max(...st.breakdown.map(b => b.min));
+      const stHtml = st.breakdown.map(b => `
+        <div class="flex items-center gap-3 text-sm">
+          <span class="w-20 truncate">${b.app}</span>
+          <div class="flex-1 bg-slate-700 rounded-full h-2">
+            <div class="bg-blue-500 h-2 rounded-full" style="width:${(b.min / maxMin) * 100}%"></div>
+          </div>
+          <span class="text-slate-400 w-10 text-right">${b.min}m</span>
+        </div>
+      `).join('');
+      document.getElementById('screen-breakdown').innerHTML = stHtml;
+
+      // Tasks
+      const statusIcon = { done: '&#x2705;', in_progress: '&#x1F7E1;', todo: '&#x26AA;' };
+      const statusOrder = { in_progress: 0, todo: 1, done: 2 };
+      const priorityOrder = { critical: 0, high: 1, medium: 2, low: 3 };
+
+      const sorted = [...today.tasks].sort((a, b) => {
+        const s = statusOrder[a.status] - statusOrder[b.status];
+        if (s !== 0) return s;
+        return priorityOrder[a.priority] - priorityOrder[b.priority];
+      });
+
+      const taskHtml = sorted.map(t => `
+        <div class="flex items-center justify-between text-sm p-2 rounded hover:bg-slate-700/50 priority-${t.priority} ${t.status === 'done' ? 'opacity-50' : ''}">
+          <div class="flex items-center gap-2">
+            <span>${statusIcon[t.status]}</span>
+            <span class="${t.status === 'done' ? 'line-through' : ''}">${t.title}</span>
+            <span class="px-1.5 py-0.5 rounded text-xs tag-${t.tag}">${t.tag}</span>
+          </div>
+          <span class="text-xs text-slate-500">${t.priority}</span>
+        </div>
+      `).join('');
+      document.getElementById('task-list').innerHTML = taskHtml;
+
+      // Weekly Charts
+      renderCharts(d.weekly);
+    }
+
+    function renderCharts(weekly) {
+      const chartOpts = {
+        responsive: true,
+        plugins: { legend: { display: false } },
+        scales: {
+          x: { ticks: { color: '#94a3b8' }, grid: { color: '#1e293b' } },
+          y: { ticks: { color: '#94a3b8' }, grid: { color: '#334155' }, beginAtZero: true }
+        }
+      };
+
+      new Chart(document.getElementById('chart-pomodoros'), {
+        type: 'bar',
+        data: {
+          labels: weekly.pomodoros_by_day.map(d => d.day),
+          datasets: [{
+            data: weekly.pomodoros_by_day.map(d => d.count),
+            backgroundColor: weekly.pomodoros_by_day.map(d => d.count > 0 ? '#ef4444' : '#334155'),
+            borderRadius: 4
+          }]
+        },
+        options: chartOpts
+      });
+
+      new Chart(document.getElementById('chart-screentime'), {
+        type: 'line',
+        data: {
+          labels: weekly.screen_time_by_day.map(d => d.day),
+          datasets: [{
+            data: weekly.screen_time_by_day.map(d => Math.round(d.min / 60 * 10) / 10),
+            borderColor: '#3b82f6',
+            backgroundColor: 'rgba(59,130,246,0.1)',
+            fill: true,
+            tension: 0.3,
+            pointRadius: 4,
+            pointBackgroundColor: '#3b82f6'
+          }]
+        },
+        options: { ...chartOpts, scales: { ...chartOpts.scales, y: { ...chartOpts.scales.y, ticks: { ...chartOpts.scales.y.ticks, callback: v => v + 'h' } } } }
+      });
+    }
+
+    load();
+  </script>
+</body>
+</html>

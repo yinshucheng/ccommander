@@ -1,0 +1,50 @@
+{
+  "updated_at": "2026-04-03T10:30:00+08:00",
+  "today": {
+    "date": "2026-04-03",
+    "pomodoros": {
+      "completed": 3,
+      "target": 6,
+      "history": [
+        { "title": "Miyo 技术方案评审", "duration_min": 25, "completed_at": "09:15", "tag": "work" },
+        { "title": "Skill UI POC 开发", "duration_min": 25, "completed_at": "10:00", "tag": "side-project" },
+        { "title": "Code Review", "duration_min": 25, "completed_at": "10:30", "tag": "work" }
+      ]
+    },
+    "tasks": [
+      { "id": 1, "title": "Skill UI POC 跑通", "status": "in_progress", "priority": "high", "tag": "side-project" },
+      { "id": 2, "title": "Miyo Channel API 联调", "status": "todo", "priority": "high", "tag": "work" },
+      { "id": 3, "title": "小红书发第一篇", "status": "todo", "priority": "critical", "tag": "output" },
+      { "id": 4, "title": "DAComp 评测环境搭建", "status": "todo", "priority": "medium", "tag": "work" },
+      { "id": 5, "title": "写周报", "status": "done", "priority": "low", "tag": "work" },
+      { "id": 6, "title": "Code Review 3 个 MR", "status": "done", "priority": "medium", "tag": "work" }
+    ],
+    "screen_time": {
+      "total_min": 143,
+      "breakdown": [
+        { "app": "Claude Code", "min": 65 },
+        { "app": "VS Code", "min": 38 },
+        { "app": "Chrome", "min": 25 },
+        { "app": "微信", "min": 10 },
+        { "app": "小红书", "min": 5 }
+      ]
+    }
+  },
+  "weekly": {
+    "pomodoros_by_day": [
+      { "day": "Mon", "count": 5 },
+      { "day": "Tue", "count": 4 },
+      { "day": "Wed", "count": 6 },
+      { "day": "Thu", "count": 3 },
+      { "day": "Fri", "count": 0 },
+      { "day": "Sat", "count": 0 },
+      { "day": "Sun", "count": 0 }
+    ],
+    "screen_time_by_day": [
+      { "day": "Mon", "min": 280 },
+      { "day": "Tue", "min": 310 },
+      { "day": "Wed", "min": 265 },
+      { "day": "Thu", "min": 143 }
+    ]
+  }
+}
