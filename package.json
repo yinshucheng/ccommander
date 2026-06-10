@@ -11,6 +11,7 @@
     "serve": "node bin/commander.js serve",
     "dev:client": "vite",
     "build": "vite build",
+    "test": "node --test \"test/**/*.test.mjs\"",
     "dev": "concurrently -n server,client -c blue,green \"node bin/commander.js serve\" \"vite\""
   },
   "dependencies": {
