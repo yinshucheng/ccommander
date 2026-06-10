@@ -1,0 +1,91 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## 这是什么
+
+Commander ⚡ —— AI 多实例实时指挥台,「像皇帝批阅奏章一样」管理多个 Claude Code 会话。机器上正在跑的 Claude Code 会话会自动汇聚成卡片,按「谁在等你」排序供逐条审阅/续话/调度。
+
+## 命令
+
+```bash
+pnpm install                          # 用 pnpm，不是 npm
+pnpm build                            # vite 构建前端到 dist/（server 托管它）
+pnpm dev                              # server(3890) + vite(5173) 并行，前端热更
+pnpm dev:client                       # 只起 vite 开发服务器
+
+node bin/commander.js serve --port 3890   # 起服务（默认端口 3890）
+node bin/commander.js install-hooks       # 装全局 Claude Code hook（追加，不覆盖）
+node bin/commander.js status              # 终端速查队列
+```
+
+无测试套件、无 lint 配置。验证靠：`pnpm build` 通过 + 浏览器实测 + `node -e` 直接 import server 模块跑函数。
+
+### ⚠️ 改后端必须重启 node 进程
+
+server 模块在进程启动时被缓存。**改 `src/server/*.js` 后只 `pnpm build` 不生效**,必须重启:
+
+```bash
+pkill -f "commander.js serve"; node bin/commander.js serve --port 3890
+```
+
+只改前端则 `pnpm build`（或 `pnpm dev` 热更）即可,无需重启 server。
+
+## 架构大图
+
+两层。**调度内核稳定,内容来源/渲染可插拔**——这条边界是设计基线,见 `specs/000-architecture.md`,新接入来源不得改内核。
+
+### 数据怎么进来（两条源,scanner 兜底 hook）
+
+```
+Claude Code hook ──► ~/.commander/events.jsonl ──► events.js（tail 读新行）─┐
+                                                                          ├─► upsertFromAgent()
+~/.claude/projects/*.jsonl ──► scanner.js（周期扫描，末状态判定）──────────┘   (tasks.js)
+```
+
+- **events.js**：消费 hook 写的事件流(精确,waiting/completed ~95%)。默认只读启动后的新行。
+- **scanner.js**：扫 `~/.claude/projects` 的会话 jsonl,靠 mtime 静默阈值(180s)+ 末条事件角色判定 waiting/idle(兜底,~70%,漏报为主)。
+- **`upsertFromAgent`**（`tasks.js`）是两条源的汇合点：会话 upsert → 自动建/更新「隐式 task」→ 入队。**hook 数据优先级高于 scan**(`LIVE_RANK`),scan 不能把 hook 设的精确态覆盖回近似态。
+
+### 任务 ↔ 会话模型（`tasks.js` + `scheduler.js`）
+
+- 一个 **task** 聚合若干 **session**。会话发现时自动建 `implicit: true` 的隐式 task。
+- **排序优先级**（`scheduler.js` `rank()`）：P0 置顶 → **liveState 权重 `waiting > completed > running > idle`**(让等你的先冒出来) → 优先级 P0-P3 → skipCount 降权 → queuedAt 升序。
+- 操作:`done`/`skip`(重排到同档末尾)/`defer`(定时 `tickDefer` 到点复活)/`dismiss`(标记会话 `dismissed`,不再被扫描复活,除非来新的 waiting hook)。
+- 任何改队列的操作走 `notifyChange()` → 持久化 + ws 广播 `queue_updated`,current 变了再推 `new_current`。
+
+### transcript 渲染（结构化 parts）
+
+- **`transcript.js` `getSessionContext`**：把会话 jsonl 解析成结构化消息,每条 `{seq, role, ts, parts[], text}`。`parts` 的 `kind ∈ text|thinking|tool_use|tool_result|todos`。
+- 后端做 **`tool_use.id ↔ tool_result.tool_use_id` 配对**,结果挂在 `tool_use.result` 上,并吸收/丢弃独立的 tool_result 噪音消息。
+- 保留顶层 `text`（parts 拼成）作兼容字段,供 LLM 分析 / firstMessage。
+- 前端 **`parts.jsx`**：`MessagePart` 按 `kind` 分发到 DiffPart(Edit/Write,jsdiff 行级 diff)/BashPart(命令高亮+折叠输出)/FilePart(Read/Grep/Glob/LS 折叠)/ThinkingPart/TodoPart/GenericToolPart。highlight.js 按需注册 ~13 种语言。
+- **`SourceView`**（`TaskCard.jsx`）按 `source.type` 分发：`claude`→结构化渲染；`codex`/`web`→占位(架构预留,见 specs 002/003)。
+
+### 网页续话（`converse.js`）
+
+面板里给某会话发消息 → 在该会话 `workingDir` 下 spawn `ccr code -p <text> --resume <sid> --output-format stream-json`,解析 stream-json 增量,经 ws `type:'converse'` 推前端。**`running` 态会话禁止网页注入**(可能有活终端),并发单飞,5 分钟超时。
+
+### 前端
+
+React + Vite,`App.jsx` 经 `api.js`(含 ws `onConverse`)连后端。`TaskCard` 展示 current 任务 + 关联会话面板 + transcript;`Queue`/`Overview`/`Settings`/`AddTask` 为侧栏视图。
+
+## 状态与配置的存放（关键约束）
+
+- **运行时状态** → 仓库内 `data/{tasks,sessions,history}.json`（`store.js`,原子写 tmp+rename）。**`data/` 已 gitignore**(含本机路径与会话内容,不入库)。
+- **用户配置** → `~/.commander/config.json`（`config.js`）。含 `cmdTemplate`(续话命令模板,默认走 ccr)、LLM 分析的 `analyzeApiKey` 等。
+- **密钥(SiliconFlow 等)只存 `~/.commander/config.json`,绝不入库、不硬编码、打印时脱敏。** `/api/config` 明文返回 key 仅在 localhost 可接受,若暴露到网络必须改。
+
+## Hook 安装的安全约束
+
+`install-hooks.js` 把 `commander-emit.sh` 装成 Claude Code 全局 hook(Notification→waiting / Stop→completed / SessionStart→running / SessionEnd→closed)。**追加而非覆盖**,用 `commander-emit.sh` 标记识别自己装的条目以便幂等/卸载。
+
+**改 hook 安装逻辑时务必保留用户已有的 hook**——尤其 Red Alert 提示音(`notify-waiting.sh`/`notify-done.sh`)和 vibe-island hook 不能丢。`~/.claude/settings.json` 会先备份(`.commander-bak`)。
+
+## 通过 ccr 时的网络坑
+
+本环境的 web 调用经 ccr(claude-code-router)代理。**`WebSearch` 工具会 400 报错**(`input_schema: Field required`)——改用 tavily MCP 工具(`mcp__tavily__tavily_search` / `tavily_extract`)。
+
+## 开发流程：spec 驱动
+
+新特性动手前先在 `specs/NNN-<slug>.md` 写规格(背景/目标/验收标准/技术方案/任务拆解),定稿确认再实现。`specs/README.md` 是索引 + 工作流;`specs/000-architecture.md` 是不可违反的架构基线;`.plans/` 放实现期临时笔记(可丢)。接到需求时**先读 `specs/README.md`**。
