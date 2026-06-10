@@ -1,0 +1,8 @@
+node_modules/
+dist/
+*.log
+.DS_Store
+
+# 运行时本地状态（含本机路径与会话内容，不入库）
+data/
+*.tmp

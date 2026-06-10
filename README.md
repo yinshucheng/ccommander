@@ -29,5 +29,37 @@ Commander 把所有 AI 实例的状态汇总到一个面板，让你：
 
 ## 不依赖 Vibeflow
 
-Commander 独立运行。装一个 hook，开一个 TUI，就有完整的批阅奏章体验。
+Commander 独立运行。装一个 hook，开一个面板，就有完整的批阅奏章体验。
 接上 Vibeflow 后多一层目标绑定——看到的不是"某个 Claude Code 完成了"，而是"小红书项目又推进了一步"。
+
+## 快速开始（V1 已实现）
+
+```bash
+pnpm install && pnpm build
+node bin/commander.js install-hooks   # 装全局 Claude Code hook（追加，不覆盖现有 hook）
+node bin/commander.js serve --port 3890
+# 打开 http://localhost:3890
+```
+
+- **会话自动冒出来**：你机器上正在跑的 Claude Code 会话，完成/等待时自动出现在面板
+- **三键批阅**：`Enter` 完成 · `S` 跳过 · `L` 稍后 · `D` 移除，处理完下一个自动弹出
+- **零侵入兜底**：即使不装 hook，启动时也会扫描 `~/.claude/projects` 列出近期会话
+- **状态语义**：🟡 可能在等你 / 🔵 在跑 / ⚪ 静默 / ✓ 已完成
+
+实现细节见 [INTEGRATION.md](./INTEGRATION.md)（整合设计）与 [PLAN_COMMANDER.md](./PLAN_COMMANDER.md)（实现计划）。
+
+## V1 架构（已落地）
+
+```
+浏览器面板 (React+Vite)  ──ws──  Node server (Express+ws)
+                                   ├── events.js   消费 ~/.commander/events.jsonl（hook 推送）
+                                   ├── scanner.js  扫 ~/.claude/projects JSONL（兜底发现）
+                                   ├── ingest      会话 → 自动建隐式 task → 入队
+                                   ├── scheduler   waiting > completed > running > idle 排序
+                                   └── JSON 持久化  data/{tasks,sessions,history}.json
+         ▲
+hooks/commander-emit.sh  ←  Claude Code Stop/Notification/SessionStart hook（复用 parse-hook.py）
+```
+
+> **状态准确度自知**：hook 触发的 waiting/completed ~95%+；纯扫描兜底的 waiting ~70%（漏报为主）。
+> 装 hook 后状态自动精确化。
