@@ -1,4 +1,5 @@
 import React, { useState } from 'react'
+import { toolSummary } from './view-mode.js'
 import { marked } from 'marked'
 import hljs from 'highlight.js/lib/core'
 import 'highlight.js/styles/github-dark.css'
@@ -241,6 +242,21 @@ function ToolPart({ part }) {
   if (part.name === 'Bash') return <BashPart part={part} />
   if (FILE_TOOL_META[part.name]) return <FilePart part={part} />
   return <GenericToolPart part={part} />
+}
+
+// ── 单行折叠（Digest 档）：thinking / tool_use 收成一行，点击就地展开完整 MessagePart ──
+export function CollapsedPart({ part }) {
+  const [open, setOpen] = useState(false)
+  if (open) return <MessagePart part={part} />
+  const isThinking = part.kind === 'thinking'
+  const label = isThinking ? '💭 思考' : toolSummary(part)
+  const isErr = !isThinking && part.result?.isError
+  return (
+    <button className={`collapsed-line${isErr ? ' err' : ''}`} onClick={() => setOpen(true)} title="点击展开">
+      <span className="collapsed-caret">▸</span>
+      <span className="collapsed-label">{label}</span>
+    </button>
+  )
 }
 
 export function MessagePart({ part }) {
