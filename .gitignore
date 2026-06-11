@@ -16,3 +16,8 @@ data/
 # 多特性并行开发的 worktree 与端口标记（见 specs/014）
 .worktrees/
 .commander-port
+
+# impeccable skill 的本机安装/运行产物（工具环境，不入库）
+.agents/
+.impeccable/
+skills-lock.json

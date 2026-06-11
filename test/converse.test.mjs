@@ -8,7 +8,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFile, unlink } from 'node:fs/promises'
-import { saveUploads } from '../src/server/converse.js'
+import { saveUploads, extractSessionId } from '../src/server/converse.js'
 
 // 1x1 像素 PNG（合法 base64），用作最小图片载荷
 const PNG_1PX =
@@ -49,4 +49,26 @@ test('saveUploads 跳过非法 data URL，不抛错', async () => {
 test('saveUploads 空入参返回空数组', async () => {
   assert.deepEqual(await saveUploads([]), [])
   assert.deepEqual(await saveUploads(), [])
+})
+
+// ── 新建会话：从 stream-json 抽 session_id（spec 013）──
+// 不变量：新建会话靠从 init/system 事件抓 session_id 来 upsertFromAgent 入队。
+// 抓不到只能等 scanner 30s 兜底，秒级反馈全靠这里——钉死它。
+
+test('extractSessionId 从 system/init 事件抽 session_id', () => {
+  assert.equal(
+    extractSessionId({ type: 'system', subtype: 'init', session_id: 'abc-123', cwd: '/x' }),
+    'abc-123'
+  )
+})
+
+test('extractSessionId 兜底认 camelCase sessionId', () => {
+  assert.equal(extractSessionId({ type: 'system', sessionId: 'def-456' }), 'def-456')
+})
+
+test('extractSessionId 对不带 id 的增量/空输入返回 null', () => {
+  assert.equal(extractSessionId({ type: 'assistant', message: { content: [] } }), null)
+  assert.equal(extractSessionId({ type: 'result', result: 'done' }), null)
+  assert.equal(extractSessionId(null), null)
+  assert.equal(extractSessionId('garbage'), null)
 })

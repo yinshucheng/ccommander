@@ -42,6 +42,8 @@
 | [009](009-queue-semantics-and-panel.md) | 队列语义修正 + 面板能力增强 + 空会话过滤 | done | ★ 高 |
 | [010](010-converse-multiturn-clarify.md) | 续话支持多轮澄清（权限 skip 兜底） | done | ★ 高 |
 | [011](011-startup-bootstrap.md) | 启动正规化：start.sh 一键拉起 + 通用启动方式 | done | ★ 高 |
+| [012](012-transcript-view-modes.md) | 批阅视图档位：全文 / 摘要 / 对话 | done | 中 |
+| [013](013-spawn-new-session.md) | 网页内启动全新 session：面板分组头「＋ 新会话」 | done | 中 |
 | [014](014-parallel-feature-workflow.md) | 多特性并行开发工作流：git worktree + 运行隔离 | accepted | ★ 高 |
 
 > 编号 ≠ 实现顺序。优先级见上表，实际排期由用户定。
@@ -49,5 +51,5 @@
 ## 相关文档
 
 - `docs/VISION.md` `docs/PRD.md` — 产品愿景与需求（上游，变动慢）
-- `DESIGN.md` `PLAN_COMMANDER.md` `INTEGRATION.md` — 总体设计与集成说明
+- `docs/DISPATCH-DESIGN.md` `PLAN_COMMANDER.md` `INTEGRATION.md` — 总体设计与集成说明（早期设计稿）
 - `.plans/` — 实现期的临时笔记（短期、可丢）

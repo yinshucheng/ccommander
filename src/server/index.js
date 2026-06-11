@@ -27,7 +27,7 @@ import { startScanner, countClaudeProcesses } from './scanner.js'
 import { getConfig, patchConfig } from './config.js'
 import { getSessionContext } from './transcript.js'
 import { analyzeSession } from './analyze.js'
-import { sendMessage, saveUploads } from './converse.js'
+import { sendMessage, saveUploads, startSession } from './converse.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const DIST = join(__dirname, '../../dist')
@@ -162,6 +162,15 @@ export function startServer({ port = 3890 } = {}) {
   })
 
   // ---- Sessions ----
+  // 网页内启动全新会话（不带 --resume）：在指定项目目录下 spawn claude -p <text>
+  app.post('/api/sessions/new', (req, res) => {
+    const workingDir = (req.body?.workingDir || '').trim()
+    const text = (req.body?.text || '').trim()
+    if (!workingDir) return res.status(400).json({ ok: false, error: '缺少项目目录' })
+    if (!text) return res.status(400).json({ ok: false, error: '消息为空' })
+    const r = startSession({ workingDir, text })
+    res.status(r.status || 200).json(r)
+  })
   app.get('/api/sessions', (req, res) => res.json(getSessions()))
   app.patch('/api/sessions/:id', (req, res) => {
     const store = getSessions()

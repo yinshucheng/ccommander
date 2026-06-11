@@ -7,7 +7,7 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readdirSync, statSync, existsSync } from 'node:fs'
+import { readdirSync, statSync, existsSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { getSessionContext } from '../src/server/transcript.js'
@@ -248,5 +248,67 @@ test('008: 发生过 compact 的会话,未压缩轮次严格小于总轮次', (t
   assert.ok(
     COMPACTED.uncompactedTurns < COMPACTED.userTurns,
     `compact 后未压缩轮次(${COMPACTED.uncompactedTurns})应 < 总轮次(${COMPACTED.userTurns})`
+  )
+})
+
+// spec 010 续：续话/恢复会话时 Claude Code 自动注入的 meta 占位消息
+// （user "Continue from where you left off." isMeta:true → assistant "No response requested."）
+// 不该被当成真实对话渲染。否则用户看到「我没操作怎么冒出一句」。
+// 根因层：getSessionContext 应跳过 isMeta 消息，并丢弃紧随其后的空回应。
+// 用临时 fixture（自包含，不依赖现场会话是否恰好含 meta）。
+function withFixture(lines, fn) {
+  const sid = 'test-meta-fixture-0000'
+  const dir = join(PROJECTS_DIR, '-test-commander-meta-fixture')
+  mkdirSync(dir, { recursive: true })
+  const file = join(dir, `${sid}.jsonl`)
+  writeFileSync(file, lines.map((l) => JSON.stringify(l)).join('\n') + '\n')
+  try {
+    return fn(sid)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+}
+
+const ts = '2026-06-11T00:00:00.000Z'
+
+test('010: 跳过 isMeta 占位消息（Continue from where you left off.）', () => {
+  const c = withFixture(
+    [
+      { type: 'user', timestamp: ts, message: { role: 'user', content: '真实问题：帮我改下登录' } },
+      { type: 'assistant', timestamp: ts, message: { role: 'assistant', content: [{ type: 'text', text: '好的' }] } },
+      { type: 'user', isMeta: true, timestamp: ts, message: { role: 'user', content: 'Continue from where you left off.' } },
+      { type: 'assistant', timestamp: ts, message: { role: 'assistant', content: [{ type: 'text', text: 'No response requested.' }] } },
+      { type: 'user', timestamp: ts, message: { role: 'user', content: '继续改注册' } },
+    ],
+    (sid) => getSessionContext(sid, { limit: 50 })
+  )
+  assert.ok(c.found, 'fixture 应可解析')
+  const texts = c.recentMessages.map((m) => m.text)
+  assert.ok(
+    !texts.some((t) => /Continue from where you left off/.test(t)),
+    'isMeta 占位消息仍出现在历史里 —— 漏过滤'
+  )
+  assert.ok(
+    !texts.some((t) => /No response requested/.test(t)),
+    '紧随 meta 的空回应仍出现在历史里 —— 应一并丢弃'
+  )
+  // 真实对话不能被误杀
+  assert.ok(texts.some((t) => /帮我改下登录/.test(t)), '真实用户消息被误删')
+  assert.ok(texts.some((t) => /继续改注册/.test(t)), '真实用户消息被误删')
+})
+
+test('010: 内容恰为 "No response requested." 的真实回复不被误杀（前面不是 meta 时）', () => {
+  const c = withFixture(
+    [
+      { type: 'user', timestamp: ts, message: { role: 'user', content: '你需要我补充什么吗？' } },
+      { type: 'assistant', timestamp: ts, message: { role: 'assistant', content: [{ type: 'text', text: 'No response requested.' }] } },
+    ],
+    (sid) => getSessionContext(sid, { limit: 50 })
+  )
+  assert.ok(c.found)
+  const texts = c.recentMessages.map((m) => m.text)
+  assert.ok(
+    texts.some((t) => /No response requested/.test(t)),
+    '前面不是 meta 占位时，这句应被当成正常回复保留'
   )
 })

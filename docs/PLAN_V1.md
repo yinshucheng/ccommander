@@ -22,7 +22,7 @@
 
 ## 2. 数据模型
 
-直接采用 DESIGN.md 的 `Task` / `Session` 结构，V1 简化：
+直接采用 DISPATCH-DESIGN.md 的 `Task` / `Session` 结构，V1 简化：
 - Task：`id, title?, context?, priority, type?, status, sessions[], createdAt, queuedAt?, startedAt?, completedAt?, skipCount, deferUntil?, notes?`
 - Session：`id, label?, agentType, sessionId?, workingDir, command, status, taskId?, lastOutput?, createdAt, lastActiveAt`（V1 无 pid，因为不 spawn 进程）
 
@@ -30,7 +30,7 @@
 - Task status: `queued | active | done | skipped`（V1 暂不用 waiting_agent，因为没有自动检测）
 - defer：用 `deferUntil` 时间戳，到点了重新进 queue
 
-## 3. 排序算法（DESIGN 3.1）
+## 3. 排序算法（DISPATCH-DESIGN 3.1）
 
 ```
 1. deferUntil 未到的任务不参与排序（隐藏）
@@ -44,8 +44,8 @@
 
 ```
 dispatch/
-├── DESIGN.md
-├── PLAN_V1.md            # 本文件
+├── docs/DISPATCH-DESIGN.md
+├── docs/PLAN_V1.md       # 本文件
 ├── package.json          # type: module, scripts
 ├── vite.config.js        # 前端 dev server + proxy /api、/ws 到后端
 ├── bin/

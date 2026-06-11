@@ -152,6 +152,7 @@ export function getSessionContext(claudeSessionId, opts = {}) {
   let firstMsg = null
   let startedAt = null // 首个带 timestamp 的事件时间
   let compactGen = 0 // 已见过几次 compact 边界（compact 后的消息 gen 更高）
+  let sawMeta = false // 上一条是否为 isMeta 占位（用于丢弃紧随其后的空回应）
   const resultsById = new Map() // tool_use_id → tool_result part（第二遍配对用）
 
   for (const l of lines) {
@@ -166,6 +167,20 @@ export function getSessionContext(claudeSessionId, opts = {}) {
     // compact 边界：isCompactSummary 标记后的对话属于「新一代」未压缩上下文
     if (ev.isCompactSummary === true) compactGen++
     if (ev.type !== 'user' && ev.type !== 'assistant') continue
+    // meta 占位：续话/恢复会话时 Claude Code 自动注入的 "Continue from where you left off."
+    // （isMeta:true），不是用户真实输入，跳过；并标记下一条以丢弃模型对它的空回应
+    // "No response requested."（否则会留下一条孤立的幽灵回复）。
+    if (ev.isMeta === true) {
+      sawMeta = true
+      continue
+    }
+    if (sawMeta) {
+      sawMeta = false
+      // 紧随 meta 的 assistant 空回应（典型为 "No response requested."）一并丢弃
+      if (ev.type === 'assistant' && /^No response requested\.?$/.test(partsToText(buildParts(ev)).trim())) {
+        continue
+      }
+    }
     const parts = buildParts(ev)
     if (!parts.length) continue
 

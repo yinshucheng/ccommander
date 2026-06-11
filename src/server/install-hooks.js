@@ -11,13 +11,20 @@ const SETTINGS = join(HOME, '.claude', 'settings.json')
 const COMMANDER_BIN = join(HOME, '.commander', 'bin')
 const EMIT_DEST = join(COMMANDER_BIN, 'commander-emit.sh')
 
-// 事件名 → 传给 emit 脚本的 event_type
+// 事件名 → hook 规格。每个 spec 产出一个或多个 hook group。
+// Notification 是个「大伞」事件,含多种子类型(idle_prompt/permission_prompt/
+// auth_success/elicitation_*),必须用 matcher 精筛——否则会把「权限询问」
+// (permission_prompt:模型其实还在 mid-turn、卡在审批)误吞成 waiting。
+// 只有 idle_prompt(真·空闲等输入)和 permission_prompt(等你点允许,也是等你)
+// 才算 waiting;其余 Notification 子类型不接。详见官方 hooks 文档的 matcher 表。
+const WAITING_MATCHERS = ['idle_prompt', 'permission_prompt']
+
 const HOOK_EVENTS = {
-  Notification: 'waiting',
-  Stop: 'completed',
-  SessionStart: 'running',
-  UserPromptSubmit: 'running',
-  SessionEnd: 'closed',
+  Notification: { type: 'waiting', matchers: WAITING_MATCHERS },
+  Stop: { type: 'completed' },
+  SessionStart: { type: 'running' },
+  UserPromptSubmit: { type: 'running' },
+  SessionEnd: { type: 'closed' },
 }
 
 // 用一个稳定标记识别「这条是 Commander 装的」，便于幂等与卸载

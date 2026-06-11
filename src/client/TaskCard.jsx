@@ -1,7 +1,37 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { api, onConverse } from './api.js'
-import { Markdown, MessagePart } from './parts.jsx'
+import { Markdown, MessagePart, CollapsedPart } from './parts.jsx'
 import { foldReplyIntoHistory } from './converse-fold.js'
+import { planView, VIEW_MODES, VIEW_MODE_LABEL, DEFAULT_MODE } from './view-mode.js'
+
+// 批阅视图档位：全局共享一个开关（spec 012），存 localStorage，跨卡片同步。
+const VIEW_MODE_KEY = 'commander.viewMode'
+const viewModeListeners = new Set()
+function readViewMode() {
+  try {
+    const v = localStorage.getItem(VIEW_MODE_KEY)
+    return VIEW_MODES.includes(v) ? v : DEFAULT_MODE
+  } catch {
+    return DEFAULT_MODE
+  }
+}
+function useViewMode() {
+  const [mode, setMode] = useState(readViewMode)
+  useEffect(() => {
+    const fn = (m) => setMode(m)
+    viewModeListeners.add(fn)
+    return () => viewModeListeners.delete(fn)
+  }, [])
+  const set = (m) => {
+    try {
+      localStorage.setItem(VIEW_MODE_KEY, m)
+    } catch {
+      /* ignore */
+    }
+    viewModeListeners.forEach((fn) => fn(m)) // 广播给所有挂载的卡片，保持全局一致
+  }
+  return [mode, set]
+}
 
 function age(ts) {
   if (!ts) return '—'
@@ -88,13 +118,40 @@ function SourceView({ source, sid, liveState, onCtx }) {
   return <ContextView sid={sid} liveState={liveState} onCtx={onCtx} />
 }
 
+// Talk 档：被隐藏的连续工具/thinking 收成一条占位条，点击临时展开整组（spec 012）。
+function ToolGroup({ group }) {
+  const [open, setOpen] = useState(false)
+  const toolCount = group.parts.filter((p) => p.kind === 'tool_use').length
+  const label = toolCount
+    ? `${toolCount} 个工具调用${group.hasError ? '（含失败）' : ''}`
+    : `${group.parts.length} 条过程`
+  if (open) {
+    return (
+      <div className="ctx-msg tool tool-group-open">
+        <button className="tool-group-bar on" onClick={() => setOpen(false)}>
+          <span className="collapsed-caret">▾</span>
+          <span>{label}</span>
+        </button>
+        <div className="ctx-parts">
+          {group.parts.map((p, j) => <MessagePart key={j} part={p} />)}
+        </div>
+      </div>
+    )
+  }
+  return (
+    <button className={`tool-group-bar${group.hasError ? ' err' : ''}`} onClick={() => setOpen(true)} title="点击展开">
+      <span className="collapsed-caret">▸</span>
+      <span>· {label}</span>
+    </button>
+  )
+}
+
 function ContextView({ sid, liveState, onCtx }) {
+  const [viewMode, setViewMode] = useViewMode() // 批阅档位（全局共享）
   const [ctx, setCtx] = useState(null)
   const [msgs, setMsgs] = useState([]) // 已加载的历史消息（含上翻的）
   const [loading, setLoading] = useState(false)
   const [loadingMore, setLoadingMore] = useState(false)
-  const [analysis, setAnalysis] = useState(null)
-  const [analyzing, setAnalyzing] = useState(false)
   // 续话
   const [input, setInput] = useState('')
   const [images, setImages] = useState([]) // 待发送图片 [{ name, dataUrl }]
@@ -125,7 +182,6 @@ function ContextView({ sid, liveState, onCtx }) {
     setLoading(true)
     setCtx(null)
     setMsgs([])
-    setAnalysis(null)
     replyRef.current = ''
     setReply('')
     setSendErr(null)
@@ -220,15 +276,6 @@ function ContextView({ sid, liveState, onCtx }) {
     if (el) el.scrollTop = el.scrollHeight
   }, [reply, msgs.length])
 
-  const runAnalyze = () => {
-    setAnalyzing(true)
-    api
-      .analyze(sid)
-      .then(setAnalysis)
-      .catch(() => setAnalysis({ ok: false, reason: '分析失败' }))
-      .finally(() => setAnalyzing(false))
-  }
-
   const doSend = () => {
     const text = input.trim()
     const imgs = images
@@ -276,21 +323,24 @@ function ContextView({ sid, liveState, onCtx }) {
 
   return (
     <div className="ctx">
-      {ctx.firstMessage && (
-        <div className="ctx-first">
-          <span className="ctx-tag">最初意图</span>
-          <span className="ctx-first-text">{ctx.firstMessage.text}</span>
-        </div>
-      )}
-
       <div className="ctx-recent">
         <div className="ctx-recent-head">
           <span>
             历史 {msgs.length} / 共 {ctx.total} 条
           </span>
-          <button className="analyze-btn" onClick={runAnalyze} disabled={analyzing}>
-            {analyzing ? '分析中…' : '🔍 分析进展'}
-          </button>
+          <div className="view-seg" role="tablist" aria-label="批阅视图">
+            {VIEW_MODES.map((m) => (
+              <button
+                key={m}
+                role="tab"
+                aria-selected={viewMode === m}
+                className={`view-seg-btn${viewMode === m ? ' on' : ''}`}
+                onClick={() => setViewMode(m)}
+              >
+                {VIEW_MODE_LABEL[m]}
+              </button>
+            ))}
+          </div>
         </div>
 
         <div className="ctx-scroll" ref={scrollRef} onScroll={onScroll}>
@@ -300,18 +350,30 @@ function ContextView({ sid, liveState, onCtx }) {
             msgs.length > 0 && <div className="load-more-hint done">— 已到最早 —</div>
           )}
 
-          {msgs.map((m, i) => (
-          <div key={`${m.seq}-${i}`} className={`ctx-msg ${m.role}`}>
-            <span className="ctx-role">{ROLE_LABEL[m.role] || m.role}</span>
-            <div className="ctx-parts">
-              {Array.isArray(m.parts) && m.parts.length ? (
-                m.parts.map((p, j) => <MessagePart key={j} part={p} />)
-              ) : (
-                <Markdown text={m.text} />
-              )}
-            </div>
-          </div>
-        ))}
+          {planView(msgs, viewMode).map((item, i) => {
+            if (item.type === 'tool-group') return <ToolGroup key={`g-${i}`} group={item} />
+            const m = item.msg
+            const role = item.role || m.role
+            // talk 档节点自带可见 part 子集(item.parts)；digest/full 用整条 msg.parts。
+            const parts = item.parts != null ? item.parts : Array.isArray(m.parts) ? m.parts : []
+            const partModes = item.partModes || []
+            return (
+              <div key={`${m.seq}-${i}`} className={`ctx-msg ${role}`}>
+                <span className="ctx-role">{ROLE_LABEL[role] || role}</span>
+                <div className="ctx-parts">
+                  {parts.length ? (
+                    parts.map((p, j) => {
+                      const mode = partModes[j] || 'show'
+                      if (mode === 'collapse') return <CollapsedPart key={j} part={p} />
+                      return <MessagePart key={j} part={p} />
+                    })
+                  ) : (
+                    <Markdown text={m.text} />
+                  )}
+                </div>
+              </div>
+            )
+          })}
 
           {(sending || reply) && (
             <div className="ctx-msg assistant streaming">
@@ -324,35 +386,6 @@ function ContextView({ sid, liveState, onCtx }) {
           )}
         </div>
       </div>
-
-      {analysis && (
-        <div className={`analysis ${analysis.ok ? '' : 'err'}`}>
-          {analysis.ok ? (
-            <>
-              <div className="an-head">
-                <b>{analysis.stage}</b>
-                {analysis.provider === 'llm' && <span className="an-badge">{analysis.model?.split('/').pop() || 'LLM'}</span>}
-              </div>
-              {analysis.summary && <div className="an-sum">{analysis.summary}</div>}
-              {analysis.blocker && (
-                <div className="an-row">
-                  <span className="an-k">卡点</span>
-                  <span>{analysis.blocker}</span>
-                </div>
-              )}
-              {analysis.nextStep && (
-                <div className="an-row">
-                  <span className="an-k">下一步</span>
-                  <span>{analysis.nextStep}</span>
-                </div>
-              )}
-              {analysis.note && <div className="an-note">{analysis.note}</div>}
-            </>
-          ) : (
-            <span>{analysis.reason}</span>
-          )}
-        </div>
-      )}
 
       {/* 续话输入框 */}
       <div className="converse">
@@ -403,12 +436,18 @@ function ContextView({ sid, liveState, onCtx }) {
   )
 }
 
-// 右栏：该 session 的元信息 + 操作。ctx 来自左栏 ContextView 上报的会话统计。
-function MetaColumn({ task, session, ctx, live, onAct, api, deferDefault = 30 }) {
+// 右栏：该 session 的元信息 + 最初意图 + 分析进展 + 操作。ctx 来自左栏 ContextView 上报。
+function MetaColumn({ task, session, ctx, live, onAct, api, deferDefault = 30, analysis, analyzing, onAnalyze }) {
   const [copied, setCopied] = useState(false)
   const [deferOpen, setDeferOpen] = useState(false)
+  const tt = task.title || '(未命名任务)'
+  // 合并「进目录 + 接续命令」：复制一条 `cd <dir> && <command>`，任意终端粘贴即进目录续会话。
+  const enterCmd =
+    session?.workingDir && session?.command
+      ? `cd ${session.workingDir} && ${session.command}`
+      : session?.command || ''
   const copyCmd = () => {
-    navigator.clipboard?.writeText(session?.command || '')
+    navigator.clipboard?.writeText(enterCmd)
     setCopied(true)
     setTimeout(() => setCopied(false), 1400)
   }
@@ -418,6 +457,13 @@ function MetaColumn({ task, session, ctx, live, onAct, api, deferDefault = 30 })
         {live && <span className={`badge ${live.cls}`}>{live.dot} {live.label}</span>}
         <span className={`badge ${PRIORITY_CLASS[task.priority]}`}>{task.priority}</span>
       </div>
+
+      {(ctx?.firstMessage?.text || task.title) && (
+        <div className="meta-intent">
+          <div className="meta-intent-tag">最初意图</div>
+          <div className="meta-intent-text">{ctx?.firstMessage?.text || task.title}</div>
+        </div>
+      )}
 
       <div className="meta-stats">
         {ctx?.startedAt && (
@@ -472,19 +518,57 @@ function MetaColumn({ task, session, ctx, live, onAct, api, deferDefault = 30 })
       </div>
 
       {session?.workingDir && (
-        <div
-          className="meta-dir"
-          title={`点击复制目录路径\n${session.workingDir}`}
-          onClick={() => navigator.clipboard?.writeText(session.workingDir)}
-        >
+        <div className="meta-dir" title={session.workingDir}>
           📁 {session.workingDir}
         </div>
       )}
 
-      {session?.command && (
-        <button className="meta-copy" onClick={copyCmd}>
-          {copied ? '✓ 已复制接续命令' : '📋 复制接续命令'}
+      {enterCmd && (
+        <button
+          className="meta-copy"
+          onClick={copyCmd}
+          title={`复制后任意终端粘贴即进目录续会话：\n${enterCmd}`}
+        >
+          {copied ? '✓ 已复制（cd + 接续命令）' : '📋 复制进入命令'}
         </button>
+      )}
+
+      {session?.claudeSessionId && (
+        <>
+          <button className="analyze-btn meta-analyze" onClick={onAnalyze} disabled={analyzing}>
+            {analyzing ? '分析中…' : '🔍 分析进展'}
+          </button>
+          {analysis && (
+            <div className={`analysis ${analysis.ok ? '' : 'err'}`}>
+              {analysis.ok ? (
+                <>
+                  <div className="an-head">
+                    <b>{analysis.stage}</b>
+                    {analysis.provider === 'llm' && (
+                      <span className="an-badge">{analysis.model?.split('/').pop() || 'LLM'}</span>
+                    )}
+                  </div>
+                  {analysis.summary && <div className="an-sum">{analysis.summary}</div>}
+                  {analysis.blocker && (
+                    <div className="an-row">
+                      <span className="an-k">卡点</span>
+                      <span>{analysis.blocker}</span>
+                    </div>
+                  )}
+                  {analysis.nextStep && (
+                    <div className="an-row">
+                      <span className="an-k">下一步</span>
+                      <span>{analysis.nextStep}</span>
+                    </div>
+                  )}
+                  {analysis.note && <div className="an-note">{analysis.note}</div>}
+                </>
+              ) : (
+                <span>{analysis.reason}</span>
+              )}
+            </div>
+          )}
+        </>
       )}
 
       <div className="meta-rule" />
@@ -493,14 +577,14 @@ function MetaColumn({ task, session, ctx, live, onAct, api, deferDefault = 30 })
         <button
           className="act done"
           title="处理完了，移出队列。除非该会话之后又冒出新的 waiting，否则不再出现"
-          onClick={() => onAct(() => api.done(task.id))}
+          onClick={() => onAct(() => api.done(task.id), { kind: 'done', title: tt })}
         >
           ✓ 完成 <kbd>Enter</kbd>
         </button>
         <button
           className="act skip"
           title="现在不处理，降权重排到同档末尾。仍在队列里，稍后会再轮到"
-          onClick={() => onAct(() => api.skip(task.id))}
+          onClick={() => onAct(() => api.skip(task.id), { kind: 'skip', title: tt })}
         >
           → 跳过 <kbd>S</kbd>
         </button>
@@ -512,7 +596,7 @@ function MetaColumn({ task, session, ctx, live, onAct, api, deferDefault = 30 })
                 className="defer-preset"
                 onClick={() => {
                   setDeferOpen(false)
-                  onAct(() => api.defer(task.id, p.minutes))
+                  onAct(() => api.defer(task.id, p.minutes), { kind: 'defer', title: tt })
                 }}
               >
                 {p.label}
@@ -527,7 +611,7 @@ function MetaColumn({ task, session, ctx, live, onAct, api, deferDefault = 30 })
             <button
               className="act defer"
               title={`一键推迟 ${minutesLabel(deferDefault)}(默认值,可在设置里改),到点自动回来`}
-              onClick={() => onAct(() => api.defer(task.id, deferDefault))}
+              onClick={() => onAct(() => api.defer(task.id, deferDefault), { kind: 'defer', title: tt })}
             >
               ⏰ 稍后 {minutesLabel(deferDefault)} <kbd>L</kbd>
             </button>
@@ -543,7 +627,7 @@ function MetaColumn({ task, session, ctx, live, onAct, api, deferDefault = 30 })
         <button
           className="act dismiss"
           title="不再处理这个会话。比「完成」更强：移除后即使会话还活着也不复活（除非来新的 waiting）"
-          onClick={() => onAct(() => api.dismiss(task.id))}
+          onClick={() => onAct(() => api.dismiss(task.id), { kind: 'dismiss', title: tt })}
         >
           ✕ 移除 <kbd>D</kbd>
         </button>
@@ -559,13 +643,28 @@ export default function TaskCard({ task, onAct, api, deferDefault = 30 }) {
   const sessions = task.sessionDetails || []
   const [active, setActive] = useState(0)
   const [ctx, setCtx] = useState(null) // 左栏 ContextView 上报的会话统计，供右栏用
+  const [analysis, setAnalysis] = useState(null) // 分析进展结果（已移到右栏展示）
+  const [analyzing, setAnalyzing] = useState(false)
   const idx = Math.min(active, Math.max(0, sessions.length - 1))
   const s = sessions[idx]
 
-  // 切换任务/会话时清掉旧统计，避免右栏短暂显示上一会话的数字
+  // 切换任务/会话时清掉旧统计/分析，避免右栏短暂显示上一会话的内容
   useEffect(() => {
     setCtx(null)
+    setAnalysis(null)
+    setAnalyzing(false)
   }, [task.id, s?.claudeSessionId])
+
+  const runAnalyze = () => {
+    const sid = s?.claudeSessionId
+    if (!sid) return
+    setAnalyzing(true)
+    api
+      .analyze(sid)
+      .then(setAnalysis)
+      .catch(() => setAnalysis({ ok: false, reason: '分析失败' }))
+      .finally(() => setAnalyzing(false))
+  }
 
   // 右栏宽度（可拖拽，记忆到 localStorage）
   const [metaW, setMetaW] = useState(() => {
@@ -599,10 +698,8 @@ export default function TaskCard({ task, onAct, api, deferDefault = 30 }) {
   return (
     <div className="task-card two-col" style={{ '--meta-w': `${metaW}px` }}>
       <div className="col-history">
-        <div className="history-head">
-          <h1 className="task-title">{task.title || '(未命名任务)'}</h1>
-          {task.context && <p className="task-context">{task.context}</p>}
-          {sessions.length > 1 && (
+        {sessions.length > 1 && (
+          <div className="history-head">
             <div className="session-tabs">
               {sessions.map((x, i) => (
                 <button
@@ -614,8 +711,8 @@ export default function TaskCard({ task, onAct, api, deferDefault = 30 }) {
                 </button>
               ))}
             </div>
-          )}
-        </div>
+          </div>
+        )}
 
         {sessions.length === 0 ? (
           <div className="session-empty">（无关联 session）</div>
@@ -632,7 +729,18 @@ export default function TaskCard({ task, onAct, api, deferDefault = 30 }) {
 
       <div className="col-resizer" ref={dragRef} onMouseDown={onResizeStart} title="拖动调节宽度" />
 
-      <MetaColumn task={task} session={s} ctx={ctx} live={live} onAct={onAct} api={api} deferDefault={deferDefault} />
+      <MetaColumn
+        task={task}
+        session={s}
+        ctx={ctx}
+        live={live}
+        onAct={onAct}
+        api={api}
+        deferDefault={deferDefault}
+        analysis={analysis}
+        analyzing={analyzing}
+        onAnalyze={runAnalyze}
+      />
     </div>
   )
 }

@@ -1,21 +1,29 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react'
 import { api, emitConverse } from './api.js'
 import TaskCard from './TaskCard.jsx'
-import Queue from './Queue.jsx'
+import Board from './Board.jsx'
 import AddTask from './AddTask.jsx'
-import Overview from './Overview.jsx'
 import Settings from './Settings.jsx'
+import RailBar from './RailBar.jsx'
+import { countByState } from './board-group.js'
+
+const VIEW_KEY = 'commander.view'
+const PIN_KEY = 'commander.railPinned'
 
 export default function App() {
   const [queue, setQueue] = useState({ current: null, waiting: [], deferred: [], done: [] })
-  const [showQueue, setShowQueue] = useState(false)
+  const [view, setView] = useState(() => localStorage.getItem(VIEW_KEY) || 'review')
+  const [railPinned, setRailPinned] = useState(() => localStorage.getItem(PIN_KEY) === '1')
+  const [boardScrollTo, setBoardScrollTo] = useState(null)
   const [showAdd, setShowAdd] = useState(false)
-  const [showOverview, setShowOverview] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
   const [connected, setConnected] = useState(false)
-  const [procCount, setProcCount] = useState(0)
   const [deferDefault, setDeferDefault] = useState(30)
   const wsRef = useRef(null)
+
+  useEffect(() => {
+    localStorage.setItem(VIEW_KEY, view)
+  }, [view])
 
   const refresh = useCallback(async () => {
     try {
@@ -61,22 +69,29 @@ export default function App() {
     }
   }, [])
 
-  // 周期拉取「有几个 claude 在跑」
-  useEffect(() => {
-    const tick = () => api.stats().then((s) => setProcCount(s.claudeProcesses)).catch(() => {})
-    tick()
-    const t = setInterval(tick, 15000)
-    return () => clearInterval(t)
-  }, [])
-
   const current = queue.current
 
+  // 批阅动作反馈:刚生效的动作 → 一条带撤销窗口的 toast。
+  // { kind: 'done'|'skip'|'defer'|'dismiss', title, undo?: () => Promise }
+  const [toast, setToast] = useState(null)
+  const toastTimer = useRef(null)
+  const dismissToast = useCallback(() => {
+    clearTimeout(toastTimer.current)
+    setToast((t) => (t ? { ...t, leaving: true } : null))
+    setTimeout(() => setToast(null), 160) // 与 toast-out 时长对齐
+  }, [])
+
   const act = useCallback(
-    async (fn) => {
+    async (fn, meta) => {
       await fn()
       refresh()
+      if (meta) {
+        clearTimeout(toastTimer.current)
+        setToast({ ...meta, leaving: false })
+        toastTimer.current = setTimeout(dismissToast, 4000) // 撤销窗口 4s
+      }
     },
-    [refresh]
+    [refresh, dismissToast]
   )
 
   // 全局快捷键
@@ -86,68 +101,122 @@ export default function App() {
       const tag = e.target.tagName
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
       const k = e.key.toLowerCase()
-      if (k === 'enter' && current) act(() => api.done(current.id))
-      else if (k === 's' && current) act(() => api.skip(current.id))
-      else if (k === 'l' && current) act(() => api.defer(current.id, deferDefault))
-      else if (k === 'd' && current) act(() => api.dismiss(current.id))
-      else if (k === 'q') setShowQueue((v) => !v)
-      else if (k === 'o') setShowOverview((v) => !v)
-      else if (k === 'n') {
+      const t = current?.title || '(未命名任务)'
+      // 视图切换：b / Tab 在 批阅 ↔ 面板 间切换
+      if (k === 'b' || k === 'tab') {
+        e.preventDefault()
+        setView((v) => (v === 'review' ? 'board' : 'review'))
+        return
+      }
+      if (k === 'n') {
         e.preventDefault()
         setShowAdd(true)
+        return
       }
+      // 批阅快捷键仅在「批阅」视图生效（面板视图用行内按钮操作）
+      if (view !== 'review' || !current) return
+      if (k === 'enter') act(() => api.done(current.id), { kind: 'done', title: t })
+      else if (k === 's') act(() => api.skip(current.id), { kind: 'skip', title: t })
+      else if (k === 'l') act(() => api.defer(current.id, deferDefault), { kind: 'defer', title: t })
+      else if (k === 'd') act(() => api.dismiss(current.id), { kind: 'dismiss', title: t })
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [current, act, showAdd, showSettings, deferDefault])
+  }, [current, act, showAdd, showSettings, deferDefault, view])
 
-  const waitingCount = queue.waiting.length
-  const doneCount = queue.done.length
+  // 左栏实时计数：从 current + waiting + deferred 的 task liveState 聚合（口径与面板一致）
+  const counts = countByState([
+    ...(queue.current ? [queue.current] : []),
+    ...queue.waiting,
+    ...queue.deferred,
+  ])
+
+  const goBoard = (scrollTo) => {
+    setView('board')
+    if (scrollTo) {
+      setBoardScrollTo(scrollTo)
+      // 让 Board 的 effect 跑一轮后清掉，避免重切视图时反复滚动
+      setTimeout(() => setBoardScrollTo(null), 600)
+    }
+  }
+
+  const TOAST_LABEL = { done: '已完成', skip: '已跳过', defer: '已稍后', dismiss: '已移除' }
+  const TOAST_ICON = { done: '✓', skip: '→', defer: '⏰', dismiss: '✕' }
 
   return (
     <div className="app">
-      <header className="topbar">
-        <div className="topbar-left">
-          <button className="icon-btn" onClick={() => setShowQueue((v) => !v)} title="队列 (Q)">
-            ≡ 队列
-          </button>
-          <button className="icon-btn" onClick={() => setShowOverview((v) => !v)} title="全局视角 (O)">
-            🌐 全局
-          </button>
-        </div>
-        <div className="brand">Commander ⚡</div>
-        <div className="conn">
-          <span className={connected ? 'dot on' : 'dot off'} />
-          <button className="icon-btn" onClick={() => setShowAdd(true)} title="新任务 (N)">
-            + 新任务
-          </button>
-          <button className="icon-btn" onClick={() => setShowSettings(true)} title="设置">
-            ⚙
-          </button>
-        </div>
-      </header>
+      <div className={`rail-slot${railPinned ? ' pinned' : ''}`}>
+        <RailBar
+          view={view}
+          setView={setView}
+          counts={counts}
+          connected={connected}
+          onAdd={() => setShowAdd(true)}
+          onSettings={() => setShowSettings(true)}
+          onCount={goBoard}
+          pinned={railPinned}
+          onTogglePin={() => {
+            setRailPinned((p) => {
+              const next = !p
+              localStorage.setItem(PIN_KEY, next ? '1' : '0')
+              return next
+            })
+          }}
+        />
+      </div>
 
-      <main className="stage">
-        {current ? (
-          <TaskCard key={current.id} task={current} onAct={act} api={api} deferDefault={deferDefault} />
+      <div className="app-main">
+        {view === 'board' ? (
+          <main className="stage board-mode">
+            <Board
+              queue={queue}
+              api={api}
+              onAct={act}
+              deferDefault={deferDefault}
+              scrollTo={boardScrollTo}
+              onScrolled={() => setBoardScrollTo(null)}
+            />
+          </main>
         ) : (
-          <div className="empty">
-            <div className="empty-emoji">👑</div>
-            <h2>没有待处理的任务</h2>
-            <p>
-              会话完成/等待时会自动出现，或按 <kbd>N</kbd> 添加，或在终端 <code>commander add "..."</code>
-            </p>
-          </div>
+          <main className="stage">
+            {current ? (
+              <div key={current.id} className="task-enter" style={{ width: '100%', display: 'flex', justifyContent: 'center' }}>
+                <TaskCard task={current} onAct={act} api={api} deferDefault={deferDefault} />
+              </div>
+            ) : (
+              <div className="empty">
+                <div className="empty-emoji">👑</div>
+                <h2>没有待处理的任务</h2>
+                <p>
+                  会话完成/等待时会自动出现，或按 <kbd>N</kbd> 添加，或在终端 <code>commander add "..."</code>
+                </p>
+              </div>
+            )}
+          </main>
         )}
-      </main>
+      </div>
 
-      <footer className="statusbar">
-        🔵 {procCount} 个 claude 在跑 &nbsp;|&nbsp; 待处理 {waitingCount + (current ? 1 : 0)} &nbsp;|&nbsp; 稍后{' '}
-        {queue.deferred.length} &nbsp;|&nbsp; 今日已完成 {doneCount}
-      </footer>
+      {toast && (
+        <div className={`act-toast${toast.leaving ? ' leaving' : ''}`} role="status" aria-live="polite">
+          <span className={`act-toast-icon ${toast.kind}`}>{TOAST_ICON[toast.kind]}</span>
+          <span className="act-toast-text">
+            <b>{toast.title}</b> {TOAST_LABEL[toast.kind] || ''}
+          </span>
+          <button
+            className="act-toast-undo"
+            onClick={() => {
+              if (!toast.undo) return
+              act(toast.undo)
+              dismissToast()
+            }}
+            disabled={!toast.undo}
+            title={toast.undo ? '撤销这一步' : '撤销即将支持'}
+          >
+            撤销
+          </button>
+        </div>
+      )}
 
-      {showQueue && <Queue queue={queue} api={api} onAct={act} onClose={() => setShowQueue(false)} />}
-      {showOverview && <Overview onClose={() => setShowOverview(false)} />}
       {showSettings && (
         <Settings
           onClose={() => {

@@ -37,51 +37,217 @@ code,
 
 .app {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   height: 100vh;
 }
+/* 右侧主区：吃满剩余宽高，内部纵向 */
+.app-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
 
-/* topbar */
-.topbar {
+/* ── 窄左侧导航栏（取代顶部 bar，把竖向高度让给 transcript） ──
+   默认 56px 只显图标；hover 横向展开成浮层（不推主区）；钉住则在布局流里占 200px（推主区）。
+   收起态用 .rail-rail-slot 占 56px 宽（始终在流里）；真正的 .railbar 绝对定位覆盖在槽位上，
+   hover/钉住时变宽 —— 这样 hover 展开不会让主区抖动。 */
+:root {
+  --rail-w: 56px;
+  --rail-w-open: 208px;
+}
+.rail-slot {
+  position: relative;
+  flex: 0 0 var(--rail-w);
+  width: var(--rail-w);
+}
+/* 钉住时槽位占满展开宽，真正把主区推开 */
+.rail-slot.pinned {
+  flex: 0 0 var(--rail-w-open);
+  width: var(--rail-w-open);
+}
+.railbar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: var(--rail-w);
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px 8px;
+  background: var(--panel);
+  border-right: 1px solid var(--border);
+  overflow: hidden;
+  transition: width 0.16s var(--ease-out-quint, ease);
+}
+/* hover 展开（未钉住时）：浮层覆盖，带阴影 */
+.railbar:hover {
+  width: var(--rail-w-open);
+  box-shadow: 6px 0 24px rgba(0, 0, 0, 0.35);
+}
+/* 钉住：在布局流里真正占宽（推开主区），不需阴影。
+   position:relative 会让高度塌到内容，spacer 撑不开 → 显式 height:100% 填满槽位，
+   底部组（新任务/设置/连接）才会被 spacer 推到底。 */
+.railbar.pinned {
+  position: relative;
+  width: var(--rail-w-open);
+  height: 100%;
+  box-shadow: none;
+}
+.rail-top {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 10px 18px;
-  border-bottom: 1px solid var(--border);
-  background: var(--panel);
+  padding: 0 2px;
 }
-.brand {
-  font-weight: 700;
-  letter-spacing: 1px;
+.rail-logo {
+  font-size: 20px;
+  line-height: 1;
+  user-select: none;
 }
-.conn {
+.rail-pin {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 14px;
+  padding: 2px 4px;
+  border-radius: 6px;
+  /* 收起态藏起图钉，只在展开时露出 */
+  opacity: 0;
+  transition: opacity 0.16s;
+}
+.railbar:hover .rail-pin,
+.railbar.pinned .rail-pin {
+  opacity: 1;
+}
+.rail-pin:hover {
+  background: var(--panel-2);
+  color: var(--text);
+}
+.rail-group,
+.rail-bottom {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.rail-spacer {
+  flex: 1;
+}
+/* 按钮：收起时只显图标居中；展开时图标 + 文字左对齐 */
+.rail-btn {
   display: flex;
   align-items: center;
   gap: 12px;
+  height: 38px;
+  padding: 0 9px;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text);
+  border-radius: 9px;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  white-space: nowrap;
+  text-align: left;
 }
-.dot {
+.rail-btn:hover {
+  background: var(--panel-2);
+}
+.rail-btn.active {
+  border-color: var(--accent);
+  background: rgba(79, 140, 255, 0.14);
+}
+.rail-ico {
+  flex: 0 0 22px;
+  font-size: 17px;
+  text-align: center;
+}
+/* 文字标签：收起时隐藏，展开（hover/钉住）时显示 */
+.rail-label {
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.railbar:hover .rail-label,
+.railbar.pinned .rail-label {
+  opacity: 1;
+}
+/* 计数：竖排，色点 + 数字（+ 展开时文字） */
+.rail-counts {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.rail-count {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 32px;
+  padding: 0 11px;
+  background: transparent;
+  border: none;
+  border-radius: 8px;
+  color: var(--text);
+  cursor: pointer;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.rail-count:hover {
+  background: var(--panel-2);
+}
+.rc-dot {
+  flex: 0 0 8px;
   width: 8px;
   height: 8px;
   border-radius: 50%;
   display: inline-block;
 }
-.dot.on {
+.rail-count.waiting .rc-dot {
+  background: var(--p1);
+}
+.rail-count.running .rc-dot {
+  background: var(--p3);
+}
+.rail-count.idle .rc-dot {
+  background: var(--muted);
+}
+.rc-n {
+  font-size: 13px;
+  font-weight: 600;
+  min-width: 14px;
+}
+.rail-conn-row {
+  cursor: default;
+}
+/* 连接点：虽挂了 .rail-ico（用于和其他图标对齐列），但要固定成 10px 圆点，
+   必须覆盖 .rail-ico 的 flex:0 0 22px，否则被撑成 22×10 椭圆。
+   用 22px 的 flex 槽 + 居中放 10px 圆：保留列对齐又不变形。 */
+.rail-conn {
+  flex: 0 0 22px;
+  width: 22px;
+  height: 10px;
+  border-radius: 0;
+  background: none !important;
+  position: relative;
+}
+.rail-conn::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+.rail-conn.on::before {
   background: var(--p2);
 }
-.dot.off {
+.rail-conn.off::before {
   background: var(--p0);
-}
-.icon-btn {
-  background: transparent;
-  border: 1px solid var(--border);
-  color: var(--text);
-  border-radius: 6px;
-  padding: 5px 10px;
-  cursor: pointer;
-  font-size: 13px;
-}
-.icon-btn:hover {
-  background: var(--panel-2);
 }
 
 /* stage */
@@ -92,6 +258,133 @@ code,
   justify-content: center;
   padding: 32px;
   overflow: auto;
+}
+/* 面板视图：顶对齐、可滚动（不再 center） */
+.stage.board-mode {
+  align-items: flex-start;
+  justify-content: center;
+  padding: 0;
+}
+
+/* ── 面板（合并队列+全局） ── */
+.board {
+  width: 100%;
+  max-width: 980px;
+  padding: 18px 22px 40px;
+}
+.board-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 0 14px;
+  background: var(--bg);
+}
+.board-toolbar-label {
+  color: var(--muted);
+  font-size: 12px;
+  margin-right: 4px;
+}
+.board-group {
+  margin-bottom: 18px;
+}
+.board-group-head {
+  position: sticky;
+  top: 50px;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  margin-bottom: 4px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+}
+.bg-label {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--text);
+}
+.bg-count {
+  font-size: 11px;
+  color: var(--muted);
+  background: var(--panel-2);
+  border-radius: 10px;
+  padding: 1px 8px;
+}
+.board-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 8px;
+  border-radius: 7px;
+  font-size: 13px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+.board-row:hover {
+  background: var(--panel-2);
+}
+.br-dot {
+  flex-shrink: 0;
+  width: 16px;
+  text-align: center;
+}
+.br-prio {
+  flex-shrink: 0;
+  font-size: 10.5px;
+  padding: 2px 6px;
+}
+.br-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.br-sub {
+  flex-shrink: 0;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.br-age {
+  flex-shrink: 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.br-acts {
+  flex-shrink: 0;
+  display: inline-flex;
+  gap: 4px;
+  opacity: 0.45;
+  transition: opacity 0.12s;
+}
+.board-row:hover .br-acts {
+  opacity: 1;
+}
+.board-row.done {
+  opacity: 0.65;
+}
+.board-empty {
+  margin-top: 60px;
+}
+.board-done {
+  margin-top: 8px;
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+}
+.board-done summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 13px;
+  padding: 4px 0;
 }
 
 .task-card {
@@ -111,9 +404,10 @@ code,
   align-items: stretch;
   gap: 0;
   padding: 0;
-  /* stage 居中且 padding 32px：卡片高度撑满可用视口，让左栏 transcript 能 flex 撑高 */
-  height: calc(100vh - 64px - 32px - 32px); /* topbar + statusbar + stage padding 上下 */
-  max-height: 900px;
+  /* stage 居中且 padding 32px：卡片高度撑满可用视口，让左栏 transcript 能 flex 撑高。
+     已去掉顶部/底部 bar，只需扣 stage 上下 padding（左侧 railbar 是横向占位，不吃竖高）。 */
+  height: calc(100vh - 32px - 32px); /* stage padding 上下 */
+  max-height: none;
   overflow: hidden;
 }
 /* 左栏：历史 transcript（flex:1 滚动）+ 输入框（固定底部） */
@@ -127,14 +421,6 @@ code,
 }
 .history-head {
   flex-shrink: 0;
-}
-.history-head .task-title {
-  font-size: 18px;
-  margin: 0 0 6px;
-  line-height: 1.35;
-}
-.history-head .task-context {
-  margin: 0 0 8px;
 }
 /* 中间可拖拽分隔条 */
 .col-resizer {
@@ -189,6 +475,26 @@ code,
   color: var(--muted);
   font-size: 11px;
 }
+/* 最初意图：右栏顶部，从 transcript 挪过来（去左栏重复展示） */
+.meta-intent {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 9px 11px;
+}
+.meta-intent-tag {
+  font-size: 11px;
+  color: var(--accent);
+  margin-bottom: 4px;
+}
+.meta-intent-text {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text);
+  word-break: break-word;
+  max-height: 160px;
+  overflow-y: auto;
+}
 .meta-dir {
   font-size: 12px;
   color: var(--muted);
@@ -199,10 +505,6 @@ code,
   border: 1px solid var(--border);
   border-radius: 6px;
   padding: 7px 9px;
-  cursor: pointer;
-}
-.meta-dir:hover {
-  border-color: var(--muted);
 }
 .meta-copy {
   background: var(--panel);
@@ -217,6 +519,13 @@ code,
 .meta-copy:hover {
   border-color: var(--accent);
   color: var(--accent);
+}
+/* 分析进展按钮（移到右栏）：撑满宽度，与 meta-copy 同列 */
+.meta-analyze {
+  width: 100%;
+  padding: 9px 12px;
+  font-size: 13px;
+  text-align: center;
 }
 .meta-rule {
   height: 1px;
@@ -273,17 +582,6 @@ code,
   background: rgba(90, 169, 255, 0.12);
   color: var(--text);
 }
-.task-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-}
-.task-title {
-  font-size: 24px;
-  margin: 0;
-  line-height: 1.3;
-}
 .badge {
   font-size: 12px;
   font-weight: 700;
@@ -307,23 +605,6 @@ code,
   background: rgba(90, 169, 255, 0.18);
   color: var(--p3);
 }
-.task-rule {
-  height: 1px;
-  background: var(--border);
-  margin: 14px 0;
-}
-.task-context {
-  color: var(--text);
-  opacity: 0.9;
-  line-height: 1.6;
-  margin: 0 0 12px;
-}
-.task-meta {
-  color: var(--muted);
-  font-size: 13px;
-  margin-bottom: 20px;
-}
-
 .session-section {
   background: var(--panel-2);
   border: 1px solid var(--border);
@@ -483,14 +764,120 @@ code,
   color: var(--text);
 }
 
-/* statusbar */
-.statusbar {
-  padding: 8px 18px;
-  border-top: 1px solid var(--border);
-  background: var(--panel);
-  color: var(--muted);
+/* ── 批阅动作反馈 ──
+   一道朱批落下:动作生效后给一记克制确认 + 撤销窗口。
+   贴 statusbar 上方居中浮现,exit 比 enter 快(reference: 退场 ~75%)。 */
+:root {
+  --ease-out-quint: cubic-bezier(0.22, 1, 0.36, 1);
+}
+.act-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 52px; /* 浮在 statusbar 上方 */
+  transform: translateX(-50%);
+  z-index: 60; /* dropdown(队列/弹窗 overlay)之上、tooltip 之下的语义层 */
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: min(520px, 92vw);
+  padding: 10px 12px 10px 14px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.45);
   font-size: 13px;
-  text-align: center;
+  color: var(--text);
+  animation: toast-in 200ms var(--ease-out-quint);
+}
+.act-toast.leaving {
+  animation: toast-out 150ms var(--ease-out-quint) forwards;
+}
+.act-toast-icon {
+  flex-shrink: 0;
+  font-size: 14px;
+}
+.act-toast-icon.done {
+  color: var(--p2);
+}
+.act-toast-icon.skip {
+  color: var(--p1);
+}
+.act-toast-icon.defer {
+  color: var(--p3);
+}
+.act-toast-icon.dismiss {
+  color: var(--p0);
+}
+.act-toast-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.act-toast-text b {
+  color: var(--text);
+  font-weight: 600;
+}
+.act-toast-undo {
+  flex-shrink: 0;
+  background: transparent;
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  border-radius: 6px;
+  padding: 4px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.act-toast-undo:hover:not(:disabled) {
+  background: rgba(79, 140, 255, 0.14);
+}
+.act-toast-undo:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 8px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+@keyframes toast-out {
+  to {
+    opacity: 0;
+    transform: translate(-50%, 6px);
+  }
+}
+
+/* ── 奏章呈上:卡片切换过渡 ──
+   当前任务变更时,新卡淡入上浮,给"下一份自动呈上"的连续感(不再瞬切)。
+   挂在 stage 的 key 变更上,纯 transform/opacity,不触发 layout。 */
+.task-enter {
+  animation: card-enter 220ms var(--ease-out-quint);
+}
+@keyframes card-enter {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.995);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .act-toast,
+  .act-toast.leaving,
+  .task-enter {
+    animation-duration: 0.01ms !important;
+  }
 }
 
 /* queue panel */
@@ -580,6 +967,64 @@ code,
 .q-act:hover {
   background: rgba(255, 255, 255, 0.08);
 }
+.q-act:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* 分组头「＋ 新会话」入口 + 内联输入 */
+.bg-new {
+  margin-left: auto;
+  padding: 2px 9px;
+  font-size: 11px;
+  border: 1px solid var(--border, #333);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.bg-new:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text);
+}
+.ns-inline {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0 0 8px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--panel-2);
+}
+.ns-dir {
+  font-size: 11px;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ns-text {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  padding: 6px 8px;
+  font: inherit;
+  font-size: 13px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+}
+.ns-err {
+  font-size: 12px;
+  color: var(--danger, #e5534b);
+}
+.ns-acts {
+  display: flex;
+  gap: 6px;
+}
 
 /* modal */
 .modal-overlay {
@@ -642,12 +1087,6 @@ code,
   margin-top: 6px;
 }
 
-/* ── topbar 左侧多按钮 ── */
-.topbar-left {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-}
 .field-hint {
   font-size: 12px;
   color: var(--muted);
@@ -670,26 +1109,6 @@ code,
   color: var(--muted);
   font-size: 13px;
   padding: 6px 0;
-}
-.ctx-first {
-  flex-shrink: 0;
-  display: flex;
-  gap: 8px;
-  align-items: baseline;
-  margin-bottom: 10px;
-}
-.ctx-tag {
-  flex-shrink: 0;
-  font-size: 11px;
-  color: var(--accent);
-  background: rgba(90, 169, 255, 0.12);
-  padding: 2px 7px;
-  border-radius: 5px;
-}
-.ctx-first-text {
-  color: var(--fg);
-  font-size: 13.5px;
-  line-height: 1.5;
 }
 /* ContextView 根：在左栏 flex 列里撑满，让 transcript 滚动区吃掉剩余高度、输入框固定底部 */
 .ctx {
@@ -1324,4 +1743,98 @@ code,
   border: 1px solid var(--border);
   border-radius: 6px;
   background: #fff;
+}
+
+/* ── 批阅视图档位切换（spec 012）── */
+.view-seg {
+  display: inline-flex;
+  gap: 1px;
+  background: var(--border);
+  border-radius: 6px;
+  padding: 1px;
+  overflow: hidden;
+}
+.view-seg-btn {
+  background: var(--panel);
+  color: var(--muted);
+  border: none;
+  font-size: 11px;
+  padding: 3px 9px;
+  cursor: pointer;
+  border-radius: 5px;
+  line-height: 1.4;
+}
+.view-seg-btn:hover {
+  color: var(--text);
+}
+.view-seg-btn.on {
+  background: rgba(79, 140, 255, 0.18);
+  color: var(--accent);
+}
+
+/* 单行折叠（Digest 档：thinking / 工具收成一行，可点开） */
+.collapsed-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  font-size: 12px;
+  padding: 2px 4px;
+  margin: 1px 0;
+  cursor: pointer;
+  border-radius: 4px;
+}
+.collapsed-line:hover {
+  background: var(--panel-2);
+  color: var(--text);
+}
+.collapsed-line.err {
+  color: var(--danger, #e5534b);
+}
+.collapsed-caret {
+  opacity: 0.6;
+  font-size: 10px;
+}
+.collapsed-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Talk 档：被隐藏的连续工具/thinking 占位条 */
+.tool-group-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 1px dashed var(--border);
+  color: var(--muted);
+  font-size: 12px;
+  padding: 4px 8px;
+  margin: 4px 0;
+  cursor: pointer;
+  border-radius: 6px;
+}
+.tool-group-bar:hover {
+  background: var(--panel-2);
+  color: var(--text);
+}
+.tool-group-bar.err {
+  border-color: rgba(229, 83, 75, 0.5);
+  color: var(--danger, #e5534b);
+}
+.tool-group-bar.on {
+  border-style: solid;
+  margin-bottom: 4px;
+}
+.tool-group-open {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
 }

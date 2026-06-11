@@ -6,6 +6,7 @@ import { getSessions, persist } from './store.js'
 import { broadcast } from './bus.js'
 import { getConfig } from './config.js'
 import { findSessionFile } from './transcript.js'
+import { upsertFromAgent } from './tasks.js'
 
 // 正在进行的网页续话：claudeSessionId -> child process
 const inflight = new Map()
@@ -33,13 +34,27 @@ export async function saveUploads(images = []) {
 }
 let seq = 0
 
+// stream-json 的 init/system 事件里带本次会话的 session_id（claude 原生 & ccr 透传均如此）。
+// 抽成纯函数便于回归（test/converse.test.mjs）：返回 session_id 或 null。
+export function extractSessionId(ev) {
+  if (!ev || typeof ev !== 'object') return null
+  // 原生 claude：{ type:'system', subtype:'init', session_id:'...' }
+  // 兜底：任何携带 session_id 的事件都认（首个非空即可）
+  return ev.session_id || ev.sessionId || null
+}
+
 // 解析 stream-json 的一行，抽取要推给前端的增量
-function parseStreamLine(line, onText, onResult) {
+// onSession：可选，遇到带 session_id 的事件时回调（新建会话用来纳管，续话不传）
+function parseStreamLine(line, onText, onResult, onSession) {
   let ev
   try {
     ev = JSON.parse(line)
   } catch {
     return
+  }
+  if (onSession) {
+    const sid = extractSessionId(ev)
+    if (sid) onSession(sid)
   }
   if (ev.type === 'assistant') {
     const parts = ev.message?.content || []
@@ -158,6 +173,118 @@ export function sendMessage(claudeSessionId, text, imagePaths = []) {
       if (inflight.get(claudeSessionId) === child) {
         child.kill('SIGTERM')
       }
+    },
+    5 * 60 * 1000
+  )
+
+  return { ok: true, status: 200 }
+}
+
+// 正在启动中的「网页新建会话」：workingDir -> child（开始时还没有 sessionId，按目录单飞）
+const starting = new Map()
+
+// 网页内启动全新 session（不带 --resume）：在 workingDir 下
+// `<launcher> -p <text> --output-format stream-json --verbose`。
+// 从 stream-json 首个带 session_id 的事件捕获新会话 id → upsertFromAgent 立即入队（秒级，
+// 不靠 scanner 兜底）；增量复用 ws type:'converse' 通道推前端。
+// 返回 { ok, status, error }；过程异步，session_id 拿到后才有 sid。
+export function startSession({ workingDir, text } = {}) {
+  const cwd = (workingDir || '').trim()
+  const prompt = (text || '').trim()
+  if (!cwd) return { ok: false, status: 400, error: '缺少项目目录' }
+  if (!prompt) return { ok: false, status: 400, error: '消息为空' }
+
+  // 同目录单飞：防误连点开两个
+  if (starting.has(cwd)) {
+    return { ok: false, status: 409, error: '该目录已有一个新会话正在启动中' }
+  }
+
+  const baseCmd = getConfig().cmdTemplate || ''
+  // 与续话同源：取 --resume 之前的部分作为启动器前缀
+  const launcher = baseCmd.split('--resume')[0].trim() || 'ccr code'
+  const argv = launcher.split(/\s+/)
+  const bin = argv[0]
+  const baseArgs = argv.slice(1)
+
+  const args = [...baseArgs, '-p', prompt, '--output-format', 'stream-json', '--verbose']
+
+  const child = spawn(bin, args, { cwd, env: process.env })
+  child.stdin?.end()
+  starting.set(cwd, child)
+
+  let buf = ''
+  let sid = null
+  let finalResult = null
+
+  // 捕获到 session_id：纳管入队 + 把 inflight 键补成 sid + 广播 start
+  const onSession = (newSid) => {
+    if (sid) return
+    sid = newSid
+    inflight.set(sid, child)
+    upsertFromAgent({
+      claudeSessionId: sid,
+      workingDir: cwd,
+      projectRoot: cwd,
+      projectName: cwd.split(/[\\/]+/).filter(Boolean).pop() || null,
+      source: 'hook',
+      liveState: 'running',
+      eventAt: Date.now(),
+    })
+    broadcast({ type: 'converse', sid, phase: 'start' })
+  }
+
+  child.stdout.on('data', (chunk) => {
+    buf += chunk.toString()
+    let idx
+    while ((idx = buf.indexOf('\n')) >= 0) {
+      const line = buf.slice(0, idx)
+      buf = buf.slice(idx + 1)
+      if (!line.trim()) continue
+      parseStreamLine(
+        line,
+        (t) => sid && broadcast({ type: 'converse', sid, phase: 'delta', text: t }),
+        (r) => {
+          finalResult = r
+        },
+        onSession
+      )
+    }
+  })
+
+  child.stderr.on('data', () => {
+    /* ccr deprecation 噪音等，忽略 */
+  })
+
+  const finish = (extra = {}) => {
+    starting.delete(cwd)
+    if (sid) {
+      inflight.delete(sid)
+      const { sessions } = getSessions()
+      const s = sessions.find((x) => x.claudeSessionId === sid)
+      if (s) {
+        // 新建会话跑完 → 大概率在等你
+        s.liveState = 'waiting'
+        s.lastEventAt = Date.now()
+        persist('sessions')
+      }
+      broadcast({
+        type: 'converse',
+        sid,
+        phase: 'done',
+        result: finalResult?.result || '',
+        ok: finalResult?.ok ?? true,
+        ...extra,
+      })
+    }
+  }
+
+  child.on('close', () => finish())
+  child.on('error', (err) => finish({ ok: false, error: err.message }))
+
+  // 兜底超时（5 分钟）
+  setTimeout(
+    () => {
+      if (starting.get(cwd) === child) child.kill('SIGTERM')
     },
     5 * 60 * 1000
   )
