@@ -3,7 +3,9 @@ import { WebSocketServer } from 'ws'
 import { createServer } from 'node:http'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync, statSync, accessSync, constants as fsConstants } from 'node:fs'
+import { homedir } from 'node:os'
+import { delimiter as pathDelimiter } from 'node:path'
 
 import { init, getSessions, persist } from './store.js'
 import { addClient } from './bus.js'
@@ -29,6 +31,57 @@ import { sendMessage, saveUploads } from './converse.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const DIST = join(__dirname, '../../dist')
+
+// 某个可执行文件是否在 PATH 中。纯探测，无副作用。
+// 不经 shell：自行遍历 $PATH 查可执行文件，避免把 bin 拼进 sh -c 造成命令注入/误判
+//（曾经 `command -v "x; printf y"` 因 printf 存在而误返回 true）。
+export function isOnPath(bin) {
+  // 只接受安全的可执行名 token；含空格/分号/斜杠等一律判 false
+  if (typeof bin !== 'string' || !/^[A-Za-z0-9._-]+$/.test(bin)) return false
+  const dirs = (process.env.PATH || '').split(pathDelimiter).filter(Boolean)
+  for (const dir of dirs) {
+    const full = join(dir, bin)
+    try {
+      if (!statSync(full).isFile()) continue
+      accessSync(full, fsConstants.X_OK)
+      return true
+    } catch {
+      // 不存在 / 不可执行 / 无权限 → 试下一个目录
+    }
+  }
+  return false
+}
+
+// hook 是否已安装：~/.claude/settings.json 含 commander-emit.sh 标记
+function isHookInstalled() {
+  try {
+    const p = join(homedir(), '.claude', 'settings.json')
+    if (!existsSync(p)) return false
+    return readFileSync(p, 'utf8').includes('commander-emit.sh')
+  } catch {
+    return false
+  }
+}
+
+// 组装启动自检报告（纯函数，注入探测结果便于测试）。
+// probe: { distExists, claudeOnPath, ccrOnPath, hookInstalled, cmdTemplate }
+export function buildHealthReport({ port, distExists, claudeOnPath, ccrOnPath, hookInstalled, cmdTemplate }) {
+  const lines = []
+  lines.push(`✓ 端口 ${port}`)
+  lines.push(distExists ? '✓ 前端已构建' : '⚠ 前端未构建 — 运行 `pnpm build`（或用 `./start.sh` 自动构建）')
+  lines.push(claudeOnPath ? '✓ claude 可用' : '⚠ claude 不在 PATH — 续话需要它')
+  if (ccrOnPath) lines.push('✓ 检测到 ccr（如需走代理，可在 Settings 把 cmdTemplate 改为 ccr code …）')
+  lines.push(hookInstalled ? '✓ hook 已安装' : '⚠ hook 未安装 — 运行 `install-hooks`（或 `./start.sh`）')
+
+  // 续话结论：取 cmdTemplate 首个词，核对是否在 PATH
+  const first = String(cmdTemplate || '').trim().split(/\s+/)[0] || ''
+  let resumeBin = first
+  // 形如 "ccr code ..." 实际依赖的是 ccr；"claude ..." 依赖 claude
+  const binOk = resumeBin === 'ccr' ? ccrOnPath : resumeBin === 'claude' ? claudeOnPath : isOnPath(resumeBin)
+  lines.push(`续话将用: ${first || '(未配置)'} ${binOk ? '✓' : '⚠ 该命令不在 PATH，续话可能失败'}`)
+
+  return lines
+}
 
 export function startServer({ port = 3890 } = {}) {
   init()
@@ -123,6 +176,19 @@ export function startServer({ port = 3890 } = {}) {
   if (existsSync(DIST)) {
     app.use(express.static(DIST))
     app.get('*', (req, res) => res.sendFile(join(DIST, 'index.html')))
+  } else {
+    // 未构建：返回明确提示页，而非白屏。API 路由已在上方注册，不受影响。
+    app.get('*', (req, res) =>
+      res
+        .status(503)
+        .send(
+          '<!doctype html><meta charset=utf-8>' +
+            '<body style="font-family:system-ui;padding:3rem;line-height:1.6">' +
+            '<h1>⚡ Commander 前端尚未构建</h1>' +
+            '<p>请先运行 <code>pnpm build</code>（或用 <code>./start.sh</code> 自动构建），然后刷新本页。</p>' +
+            '</body>'
+        )
+    )
   }
 
   const server = createServer(app)
@@ -140,15 +206,33 @@ export function startServer({ port = 3890 } = {}) {
   startEvents()
   startScanner()
 
+  // 端口占用等监听错误：友好提示并退出。
+  // 注意 listen 错误会同时由 http server 与挂在其上的 WebSocketServer 重新 emit；
+  // 两者都要挂监听，否则 wss 的无人监听 'error' 会被 Node 当未捕获异常抛出。
+  const onListenError = (e) => {
+    if (e.code === 'EADDRINUSE') {
+      console.error(`\n  ✗ 端口 ${port} 已被占用。换个端口：serve --port <其它端口>，或 ./start.sh --port <其它>\n`)
+      process.exit(1)
+    }
+    console.error(e)
+    process.exit(1)
+  }
+  server.on('error', onListenError)
+  wss.on('error', onListenError)
+
   server.listen(port, () => {
     console.log(`\n  ⚡ Commander 运行在 http://localhost:${port}`)
-    console.log(`     hook 事件 → ~/.commander/events.jsonl  |  扫描兜底已启动`)
-    if (!existsSync(DIST)) {
-      console.log(`  ℹ  前端未构建。开发模式请另跑 \`pnpm dev:client\` (vite @5173)`)
-      console.log(`     或 \`pnpm build\` 后由本服务托管。\n`)
-    } else {
-      console.log('')
-    }
+    console.log(`     hook 事件 → ~/.commander/events.jsonl  |  扫描兜底已启动\n`)
+    const report = buildHealthReport({
+      port,
+      distExists: existsSync(DIST),
+      claudeOnPath: isOnPath('claude'),
+      ccrOnPath: isOnPath('ccr'),
+      hookInstalled: isHookInstalled(),
+      cmdTemplate: getConfig().cmdTemplate,
+    })
+    report.forEach((l) => console.log(`     ${l}`))
+    console.log('')
   })
 
   return server

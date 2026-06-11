@@ -9,3 +9,6 @@ data/
 
 # 实现期临时笔记（可丢，不入库）
 .plans/
+
+# Claude Code 本机记忆 / 本地设置（含本机路径，不入库）
+.claude/

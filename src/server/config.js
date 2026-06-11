@@ -7,8 +7,10 @@ const CONFIG_FILE = join(COMMANDER_DIR, 'config.json')
 
 const DEFAULTS = {
   // 启动会话的命令模板。占位符：{sessionId} {workingDir}
-  // 默认走 ccr（claude-code-router），透传 --resume 给 claude
-  cmdTemplate: 'ccr code --dangerously-skip-permissions --resume {sessionId}',
+  // 默认走原生 claude（跳过权限），透传 --resume。
+  // 若你用 claude-code-router，可在 Settings 改成：
+  //   ccr code --dangerously-skip-permissions --resume {sessionId}
+  cmdTemplate: 'claude --dangerously-skip-permissions --resume {sessionId}',
   // 会话上下文展示「最近几条」消息
   contextRecentCount: 5,
   // 一键「稍后」默认推迟多少分钟(可在设置里改)
@@ -27,12 +29,20 @@ function ensureDir() {
   if (!existsSync(COMMANDER_DIR)) mkdirSync(COMMANDER_DIR, { recursive: true })
 }
 
+// 老用户(011 之前)的 config.json 默认走 ccr。新默认改成原生 claude 只应作用于
+// 「首次创建配置」；对「文件已存在但缺 cmdTemplate 字段」的老配置，沿用旧默认 ccr，
+// 否则升级会静默把这些用户的续话从 ccr 切到 claude（行为倒退）。
+const LEGACY_CMD_TEMPLATE = 'ccr code --dangerously-skip-permissions --resume {sessionId}'
+
 export function getConfig() {
   if (cache) return cache
   ensureDir()
   if (existsSync(CONFIG_FILE)) {
     try {
-      cache = { ...DEFAULTS, ...JSON.parse(readFileSync(CONFIG_FILE, 'utf8')) }
+      const parsed = JSON.parse(readFileSync(CONFIG_FILE, 'utf8'))
+      cache = { ...DEFAULTS, ...parsed }
+      // 文件已存在但没写 cmdTemplate → 视为升级前的老配置，保留旧默认而非套用新默认
+      if (!('cmdTemplate' in parsed)) cache.cmdTemplate = LEGACY_CMD_TEMPLATE
     } catch {
       cache = { ...DEFAULTS }
     }

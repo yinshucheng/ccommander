@@ -41,6 +41,7 @@
 | [008](008-two-column-taskcard.md) | TaskCard 两栏布局：左历史 / 右元信息+操作 | done | 中 |
 | [009](009-queue-semantics-and-panel.md) | 队列语义修正 + 面板能力增强 + 空会话过滤 | done | ★ 高 |
 | [010](010-converse-multiturn-clarify.md) | 续话支持多轮澄清（权限 skip 兜底） | done | ★ 高 |
+| [011](011-startup-bootstrap.md) | 启动正规化：start.sh 一键拉起 + 通用启动方式 | done | ★ 高 |
 
 > 编号 ≠ 实现顺序。优先级见上表，实际排期由用户定。
 

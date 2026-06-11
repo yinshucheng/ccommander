@@ -73,7 +73,11 @@ const [cmd, ...rest] = process.argv.slice(2)
 switch (cmd) {
   case 'serve': {
     const pIdx = rest.indexOf('--port')
-    const port = pIdx >= 0 ? Number(rest[pIdx + 1]) : PORT
+    const port = pIdx >= 0 ? Number(rest[pIdx + 1]) : Number(PORT)
+    if (!Number.isInteger(port) || port < 1 || port > 65535) {
+      console.error(`✗ 端口非法: '${pIdx >= 0 ? rest[pIdx + 1] : PORT}'（需 1..65535 的整数）`)
+      process.exit(1)
+    }
     startServer({ port })
     break
   }
