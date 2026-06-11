@@ -102,6 +102,177 @@ code,
   padding: 28px 32px;
   box-shadow: 0 8px 40px rgba(0, 0, 0, 0.4);
 }
+
+/* ── 两栏布局：左历史 / 右元信息+操作 ── */
+.task-card.two-col {
+  width: 100%;
+  max-width: 1280px;
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  padding: 0;
+  /* stage 居中且 padding 32px：卡片高度撑满可用视口，让左栏 transcript 能 flex 撑高 */
+  height: calc(100vh - 64px - 32px - 32px); /* topbar + statusbar + stage padding 上下 */
+  max-height: 900px;
+  overflow: hidden;
+}
+/* 左栏：历史 transcript（flex:1 滚动）+ 输入框（固定底部） */
+.col-history {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 20px 22px;
+  min-height: 0;
+}
+.history-head {
+  flex-shrink: 0;
+}
+.history-head .task-title {
+  font-size: 18px;
+  margin: 0 0 6px;
+  line-height: 1.35;
+}
+.history-head .task-context {
+  margin: 0 0 8px;
+}
+/* 中间可拖拽分隔条 */
+.col-resizer {
+  flex: 0 0 6px;
+  cursor: col-resize;
+  background: var(--border);
+  opacity: 0.4;
+  transition: opacity 0.15s;
+}
+.col-resizer:hover {
+  opacity: 1;
+  background: var(--accent);
+}
+/* 右栏：元信息 + 操作 */
+.col-meta {
+  flex: 0 0 var(--meta-w, 320px);
+  width: var(--meta-w, 320px);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 20px 22px;
+  overflow-y: auto;
+  background: var(--panel-2);
+  border-left: 1px solid var(--border);
+}
+.meta-badges {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.meta-stats {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.stat {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  font-size: 13px;
+}
+.stat-k {
+  flex: 0 0 56px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.stat-v {
+  color: var(--text);
+  word-break: break-word;
+}
+.stat-sub {
+  color: var(--muted);
+  font-size: 11px;
+}
+.meta-dir {
+  font-size: 12px;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  word-break: break-all;
+  line-height: 1.4;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 7px 9px;
+  cursor: pointer;
+}
+.meta-dir:hover {
+  border-color: var(--muted);
+}
+.meta-copy {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 9px 12px;
+  font-size: 13px;
+  cursor: pointer;
+  text-align: left;
+}
+.meta-copy:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.meta-rule {
+  height: 1px;
+  background: var(--border);
+  margin: auto 0 0; /* 把操作按钮推到右栏底部 */
+}
+.actions-col {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.actions-col .act {
+  width: 100%;
+  padding: 11px;
+  font-size: 14px;
+}
+.defer-presets {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+.defer-preset {
+  padding: 9px 6px;
+  font-size: 13px;
+  border: 1px solid var(--border, #333);
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+.defer-preset:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+.defer-preset.cancel {
+  grid-column: 1 / -1;
+  opacity: 0.6;
+}
+.defer-split {
+  display: flex;
+  gap: 8px;
+}
+.defer-split .act.defer {
+  flex: 1;
+  width: auto;
+}
+.defer-split .act.defer-more {
+  flex: 0 0 auto;
+  width: auto;
+  font-weight: 500;
+  color: var(--muted);
+}
+.defer-split .act.defer-more:hover {
+  background: rgba(90, 169, 255, 0.12);
+  color: var(--text);
+}
 .task-head {
   display: flex;
   align-items: flex-start;
@@ -380,6 +551,35 @@ code,
   color: var(--muted);
   font-size: 12px;
 }
+.q-skip {
+  color: var(--muted);
+  font-size: 11px;
+  opacity: 0.8;
+}
+.q-skipsum {
+  margin: 6px 0 2px;
+  padding: 6px 8px;
+  font-size: 12px;
+  color: var(--muted);
+  background: var(--panel-2);
+  border-radius: 6px;
+}
+.q-acts {
+  display: inline-flex;
+  gap: 4px;
+}
+.q-act {
+  padding: 3px 7px;
+  font-size: 11px;
+  border: 1px solid var(--border, #333);
+  border-radius: 5px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+.q-act:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
 
 /* modal */
 .modal-overlay {
@@ -472,6 +672,7 @@ code,
   padding: 6px 0;
 }
 .ctx-first {
+  flex-shrink: 0;
   display: flex;
   gap: 8px;
   align-items: baseline;
@@ -489,6 +690,31 @@ code,
   color: var(--fg);
   font-size: 13.5px;
   line-height: 1.5;
+}
+/* ContextView 根：在左栏 flex 列里撑满，让 transcript 滚动区吃掉剩余高度、输入框固定底部 */
+.ctx {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.ctx-recent {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+/* 独立滚动容器：在左栏 flex 列里 flex:1 撑满剩余高度（不再用固定 70vh）。
+   滚动条交给系统：macOS「自动隐藏」偏好下是悬浮式（CSS 无法强制常驻，已实测确认）；
+   非隐藏模式的系统/浏览器下 overflow-y:scroll 会常驻一条占位细条。scrollbar-* 给 Firefox 细化样式。 */
+.ctx-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: scroll;
+  overscroll-behavior: contain;
+  padding-right: 4px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
 }
 .ctx-recent-head {
   display: flex;
@@ -671,20 +897,15 @@ code,
 }
 
 /* ── 上翻更早 ── */
-.load-more {
-  width: 100%;
-  background: transparent;
-  border: 1px dashed var(--border);
+.load-more-hint {
+  text-align: center;
   color: var(--muted);
-  border-radius: 6px;
-  padding: 5px;
-  font-size: 12px;
-  cursor: pointer;
-  margin-bottom: 8px;
+  font-size: 11px;
+  padding: 4px 0 8px;
+  user-select: none;
 }
-.load-more:hover {
-  border-color: var(--accent);
-  color: var(--accent);
+.load-more-hint.done {
+  opacity: 0.5;
 }
 
 /* ── 流式回复光标 ── */
@@ -703,6 +924,7 @@ code,
 
 /* ── 续话输入框 ── */
 .converse {
+  flex-shrink: 0;
   margin-top: 12px;
   border-top: 1px solid var(--border);
   padding-top: 12px;
@@ -715,44 +937,97 @@ code,
   border-radius: 8px;
   padding: 10px 12px;
 }
-.converse-input {
-  width: 100%;
-  min-height: 60px;
-  resize: vertical;
+/* 整个 box 充当「输入框」外观：边框/背景在此，内部纵向排 缩略图 → textarea → 发送按钮 */
+.converse-box {
+  position: relative;
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: 8px;
+  padding: 8px 10px;
+  padding-bottom: 38px; /* 给右下角浮动的发送按钮留出空间 */
+  box-sizing: border-box;
+}
+.converse-box:focus-within {
+  border-color: var(--accent);
+}
+.converse-input {
+  width: 100%;
+  min-height: 44px;
+  max-height: 200px; /* 与 JS autosize 上限一致，超出后内部滚动 */
+  resize: none; /* 高度交给 autosize，避免与手动拖拽冲突 */
+  overflow-y: auto;
+  background: transparent; /* 外观交给 .converse-box */
+  border: none;
   color: var(--fg);
-  padding: 10px 12px;
+  padding: 2px 2px;
   font-size: 14px;
+  line-height: 1.5;
   font-family: inherit;
   box-sizing: border-box;
+  display: block;
 }
 .converse-input:focus {
   outline: none;
-  border-color: var(--accent);
 }
 .converse-input:disabled {
   opacity: 0.6;
 }
-.converse-actions {
+/* 缩略图：框内顶部一行，随内容把 textarea 往下推 */
+.converse-thumbs {
   display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 12px;
-  margin-top: 8px;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.converse-thumb {
+  position: relative;
+  width: 56px;
+  height: 56px;
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+.converse-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.converse-thumb-del {
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  width: 16px;
+  height: 16px;
+  line-height: 14px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+  font-size: 13px;
+  cursor: pointer;
 }
 .converse-err {
+  position: absolute;
+  right: 10px;
+  bottom: 44px; /* 浮在发送按钮正上方 */
   color: var(--p0);
   font-size: 12.5px;
-  margin-right: auto;
+  background: var(--bg);
+  padding: 1px 4px;
+  border-radius: 4px;
+  pointer-events: none;
 }
 .converse-send {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
   background: var(--accent);
   border: none;
   color: #fff;
   border-radius: 7px;
-  padding: 7px 16px;
+  padding: 5px 14px;
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;

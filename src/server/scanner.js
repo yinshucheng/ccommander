@@ -121,6 +121,9 @@ export function scanOnce({ maxAgeHours = 24 } = {}) {
       if (!cls) continue
 
       const projectRoot = entry.projectPath || meta.cwd || null
+      // 真实用户消息判定：readMeta 的 firstMsg 已清洗掉注入/系统/命令包裹前缀，
+      // 取到则视为「有真实用户意图」；index 的 summary 也算（人工/历史摘要）。
+      const hasRealUserMsg = !!(meta.firstMsg || entry.summary)
       upsertFromAgent({
         claudeSessionId: sessionId,
         projectName: projectRoot ? projectRoot.split('/').pop() : null,
@@ -129,6 +132,7 @@ export function scanOnce({ maxAgeHours = 24 } = {}) {
         summary: ((entry.summary || meta.firstMsg || '') + '').slice(0, 80) || null,
         liveState: cls.liveState,
         source: 'scan',
+        hasRealUserMsg,
         eventAt: jsonlMtime,
       })
       count++

@@ -13,6 +13,7 @@ export default function Settings({ onClose }) {
     await api.patchConfig({
       cmdTemplate: cfg.cmdTemplate,
       contextRecentCount: Number(cfg.contextRecentCount) || 5,
+      deferDefaultMinutes: Number(cfg.deferDefaultMinutes) || 30,
       analyzeProvider: cfg.analyzeProvider,
       analyzeBaseUrl: cfg.analyzeBaseUrl,
       analyzeApiKey: cfg.analyzeApiKey,
@@ -50,6 +51,20 @@ export default function Settings({ onClose }) {
             value={cfg.contextRecentCount ?? 5}
             onChange={(e) => setCfg({ ...cfg, contextRecentCount: e.target.value })}
           />
+        </label>
+
+        <label className="field">
+          <span>一键「稍后」默认推迟（分钟）</span>
+          <input
+            type="number"
+            min="1"
+            max="1440"
+            value={cfg.deferDefaultMinutes ?? 30}
+            onChange={(e) => setCfg({ ...cfg, deferDefaultMinutes: e.target.value })}
+          />
+          <span className="field-hint">
+            点「⏰ 稍后」或按 <kbd>L</kbd> 时一键推迟的时长。仍可在按钮上选「其他…」自定义。
+          </span>
         </label>
 
         <div className="settings-divider">LLM 分析进展</div>

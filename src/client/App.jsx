@@ -14,6 +14,7 @@ export default function App() {
   const [showSettings, setShowSettings] = useState(false)
   const [connected, setConnected] = useState(false)
   const [procCount, setProcCount] = useState(0)
+  const [deferDefault, setDeferDefault] = useState(30)
   const wsRef = useRef(null)
 
   const refresh = useCallback(async () => {
@@ -23,6 +24,17 @@ export default function App() {
       /* server 可能还没起 */
     }
   }, [])
+
+  const loadConfig = useCallback(() => {
+    api
+      .getConfig()
+      .then((c) => setDeferDefault(Number(c?.deferDefaultMinutes) || 30))
+      .catch(() => {})
+  }, [])
+
+  useEffect(() => {
+    loadConfig()
+  }, [loadConfig])
 
   // WebSocket 连接 + 自动重连
   useEffect(() => {
@@ -76,7 +88,7 @@ export default function App() {
       const k = e.key.toLowerCase()
       if (k === 'enter' && current) act(() => api.done(current.id))
       else if (k === 's' && current) act(() => api.skip(current.id))
-      else if (k === 'l' && current) act(() => api.defer(current.id, 60))
+      else if (k === 'l' && current) act(() => api.defer(current.id, deferDefault))
       else if (k === 'd' && current) act(() => api.dismiss(current.id))
       else if (k === 'q') setShowQueue((v) => !v)
       else if (k === 'o') setShowOverview((v) => !v)
@@ -87,7 +99,7 @@ export default function App() {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [current, act, showAdd, showSettings])
+  }, [current, act, showAdd, showSettings, deferDefault])
 
   const waitingCount = queue.waiting.length
   const doneCount = queue.done.length
@@ -117,7 +129,7 @@ export default function App() {
 
       <main className="stage">
         {current ? (
-          <TaskCard key={current.id} task={current} onAct={act} api={api} />
+          <TaskCard key={current.id} task={current} onAct={act} api={api} deferDefault={deferDefault} />
         ) : (
           <div className="empty">
             <div className="empty-emoji">👑</div>
@@ -134,9 +146,16 @@ export default function App() {
         {queue.deferred.length} &nbsp;|&nbsp; 今日已完成 {doneCount}
       </footer>
 
-      {showQueue && <Queue queue={queue} onClose={() => setShowQueue(false)} />}
+      {showQueue && <Queue queue={queue} api={api} onAct={act} onClose={() => setShowQueue(false)} />}
       {showOverview && <Overview onClose={() => setShowOverview(false)} />}
-      {showSettings && <Settings onClose={() => setShowSettings(false)} />}
+      {showSettings && (
+        <Settings
+          onClose={() => {
+            setShowSettings(false)
+            loadConfig()
+          }}
+        />
+      )}
       {showAdd && (
         <AddTask
           onClose={() => setShowAdd(false)}

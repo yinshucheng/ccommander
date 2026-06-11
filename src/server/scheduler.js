@@ -40,6 +40,21 @@ export function rank(tasks, now = Date.now()) {
     })
 }
 
+// 队列只剩「被推迟」的任务时,是否该把它们全部唤回。
+// 真:无 current 无 waiting(没有任何活的在排序里),但确有未到点的 defer 任务。
+// 已到点的 defer 不算「被推迟」(它本就该参与排序),done/skipped 不占队列。
+export function shouldAutoReviveAll(tasks, now = Date.now()) {
+  const hasQueued = tasks.some((t) => isQueued(t, now))
+  if (hasQueued) return false
+  return tasks.some(
+    (t) =>
+      t.deferUntil &&
+      t.deferUntil > now &&
+      t.status !== 'done' &&
+      t.status !== 'skipped'
+  )
+}
+
 // 选出当前应该处理的任务（队列首位）
 export function pickCurrent(tasks, now = Date.now()) {
   const ranked = rank(tasks, now)

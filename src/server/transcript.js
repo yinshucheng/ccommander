@@ -150,6 +150,8 @@ export function getSessionContext(claudeSessionId, opts = {}) {
 
   const msgs = []
   let firstMsg = null
+  let startedAt = null // 首个带 timestamp 的事件时间
+  let compactGen = 0 // 已见过几次 compact 边界（compact 后的消息 gen 更高）
   const resultsById = new Map() // tool_use_id → tool_result part（第二遍配对用）
 
   for (const l of lines) {
@@ -159,6 +161,10 @@ export function getSessionContext(claudeSessionId, opts = {}) {
     } catch {
       continue
     }
+    // 会话启动时间：第一个带 timestamp 的事件（含 mode/system 等非对话事件）
+    if (startedAt == null && ev.timestamp) startedAt = ev.timestamp
+    // compact 边界：isCompactSummary 标记后的对话属于「新一代」未压缩上下文
+    if (ev.isCompactSummary === true) compactGen++
     if (ev.type !== 'user' && ev.type !== 'assistant') continue
     const parts = buildParts(ev)
     if (!parts.length) continue
@@ -187,6 +193,7 @@ export function getSessionContext(claudeSessionId, opts = {}) {
       parts,
       text: text.length > 2000 ? `${text.slice(0, 2000)}…` : text,
       ts: ev.timestamp || null,
+      compactGen, // 属于第几代上下文（最后一代 = 未被压缩）
     })
   }
 
@@ -206,16 +213,25 @@ export function getSessionContext(claudeSessionId, opts = {}) {
   // 重新编号 seq（保持连续，分页才正确）
   filtered.forEach((m, i) => (m.seq = i))
 
+  // 统计：总用户轮数 + 未压缩轮数（最后一代 compactGen 里的 user 轮）
+  const userTurns = filtered.filter((m) => m.role === 'user').length
+  const uncompactedTurns = filtered.filter((m) => m.role === 'user' && m.compactGen === compactGen).length
+
   // 分页：before 给定则取 seq < before 的最后 n 条；否则取最近 n 条
   const upper = opts.before != null ? Math.max(0, Math.min(opts.before, filtered.length)) : filtered.length
   const lower = Math.max(0, upper - n)
-  const slice = filtered.slice(lower, upper)
+  // compactGen 是内部统计字段，不外泄到前端消息
+  const slice = filtered.slice(lower, upper).map(({ compactGen: _g, ...m }) => m)
 
   return {
     found: true,
     file,
     mtime,
     total: filtered.length,
+    startedAt,
+    userTurns,
+    uncompactedTurns,
+    compactCount: compactGen,
     firstMessage: firstMsg,
     recentMessages: slice,
     // 还有更早的可上翻？

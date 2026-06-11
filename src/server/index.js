@@ -16,6 +16,7 @@ import {
   doneTask,
   skipTask,
   deferTask,
+  undeferTask,
   dismissTask,
   tickDefer,
 } from './tasks.js'
@@ -24,7 +25,7 @@ import { startScanner, countClaudeProcesses } from './scanner.js'
 import { getConfig, patchConfig } from './config.js'
 import { getSessionContext } from './transcript.js'
 import { analyzeSession } from './analyze.js'
-import { sendMessage } from './converse.js'
+import { sendMessage, saveUploads } from './converse.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const DIST = join(__dirname, '../../dist')
@@ -33,7 +34,11 @@ export function startServer({ port = 3890 } = {}) {
   init()
 
   const app = express()
-  app.use(express.json())
+  // 续话路由可能带 base64 图片，跳过全局 100kb 解析，交由该路由自己的高限额解析器处理
+  app.use((req, res, next) => {
+    if (req.method === 'POST' && /^\/api\/sessions\/[^/]+\/send$/.test(req.path)) return next()
+    return express.json()(req, res, next)
+  })
 
   // ---- Tasks ----
   app.get('/api/current', (req, res) => res.json({ task: buildCurrent() }))
@@ -60,6 +65,11 @@ export function startServer({ port = 3890 } = {}) {
     if (!t) return res.status(404).json({ error: 'not found' })
     res.json(t)
   })
+  app.post('/api/tasks/:id/undefer', (req, res) => {
+    const t = undeferTask(req.params.id)
+    if (!t) return res.status(404).json({ error: 'not found' })
+    res.json(t)
+  })
   app.post('/api/tasks/:id/dismiss', (req, res) => {
     const t = dismissTask(req.params.id)
     if (!t) return res.status(404).json({ error: 'not found' })
@@ -83,10 +93,18 @@ export function startServer({ port = 3890 } = {}) {
   app.post('/api/sessions/:sid/analyze', async (req, res) => {
     res.json(await analyzeSession(req.params.sid))
   })
-  app.post('/api/sessions/:sid/send', (req, res) => {
+  // 续话可带图片（base64），单独提高 body 限制；图片落临时文件后以 @path 注入 prompt
+  app.post('/api/sessions/:sid/send', express.json({ limit: '25mb' }), async (req, res) => {
     const text = (req.body?.text || '').trim()
-    if (!text) return res.status(400).json({ ok: false, error: '消息为空' })
-    const r = sendMessage(req.params.sid, text)
+    const images = Array.isArray(req.body?.images) ? req.body.images : []
+    if (!text && !images.length) return res.status(400).json({ ok: false, error: '消息为空' })
+    let imagePaths = []
+    try {
+      imagePaths = await saveUploads(images)
+    } catch {
+      return res.status(500).json({ ok: false, error: '图片保存失败' })
+    }
+    const r = sendMessage(req.params.sid, text, imagePaths)
     res.status(r.status || 200).json(r)
   })
 

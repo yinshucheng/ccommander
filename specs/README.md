@@ -38,6 +38,9 @@
 | [005](005-converse-ux.md) | 续话不自动切卡片 | proposed | 中 |
 | [006](006-persistence.md) | 任务状态持久化与一致性 | proposed | 中 |
 | [007](007-thinking-cleanup.md) | thinking 重复字符清洗 | proposed | 低 |
+| [008](008-two-column-taskcard.md) | TaskCard 两栏布局：左历史 / 右元信息+操作 | done | 中 |
+| [009](009-queue-semantics-and-panel.md) | 队列语义修正 + 面板能力增强 + 空会话过滤 | done | ★ 高 |
+| [010](010-converse-multiturn-clarify.md) | 续话支持多轮澄清（权限 skip 兜底） | done | ★ 高 |
 
 > 编号 ≠ 实现顺序。优先级见上表，实际排期由用户定。
 

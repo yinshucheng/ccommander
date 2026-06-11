@@ -17,6 +17,7 @@ export const api = {
   done: (id, notes) => req(`/api/tasks/${id}/done`, 'POST', { notes }),
   skip: (id) => req(`/api/tasks/${id}/skip`, 'POST'),
   defer: (id, minutes) => req(`/api/tasks/${id}/defer`, 'POST', { minutes }),
+  undefer: (id) => req(`/api/tasks/${id}/undefer`, 'POST'),
   dismiss: (id) => req(`/api/tasks/${id}/dismiss`, 'POST'),
   // 配置
   getConfig: () => req('/api/config'),
@@ -30,7 +31,7 @@ export const api = {
     return req(`/api/sessions/${sid}/context${q ? `?${q}` : ''}`)
   },
   analyze: (sid) => req(`/api/sessions/${sid}/analyze`, 'POST'),
-  send: (sid, text) => req(`/api/sessions/${sid}/send`, 'POST', { text }),
+  send: (sid, text, images) => req(`/api/sessions/${sid}/send`, 'POST', { text, images }),
 }
 
 // 轻量 pub/sub：把 ws 收到的 converse 增量分发给订阅的 ContextView

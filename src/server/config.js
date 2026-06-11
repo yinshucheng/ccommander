@@ -11,6 +11,8 @@ const DEFAULTS = {
   cmdTemplate: 'ccr code --dangerously-skip-permissions --resume {sessionId}',
   // 会话上下文展示「最近几条」消息
   contextRecentCount: 5,
+  // 一键「稍后」默认推迟多少分钟(可在设置里改)
+  deferDefaultMinutes: 30,
   // ── LLM 分析进展 ──
   // provider: 'none' = 规则粗判（默认）；'openai-compatible' = 走 OpenAI 兼容 /chat/completions
   analyzeProvider: 'none',
@@ -54,6 +56,7 @@ export function patchConfig(patch = {}) {
   const allowed = [
     'cmdTemplate',
     'contextRecentCount',
+    'deferDefaultMinutes',
     'analyzeProvider',
     'analyzeBaseUrl',
     'analyzeApiKey',
@@ -64,6 +67,9 @@ export function patchConfig(patch = {}) {
   }
   if (typeof cur.contextRecentCount === 'string') {
     cur.contextRecentCount = Number(cur.contextRecentCount) || DEFAULTS.contextRecentCount
+  }
+  if (typeof cur.deferDefaultMinutes === 'string') {
+    cur.deferDefaultMinutes = Number(cur.deferDefaultMinutes) || DEFAULTS.deferDefaultMinutes
   }
   writeConfig(cur)
   cache = cur

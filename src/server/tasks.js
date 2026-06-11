@@ -1,5 +1,5 @@
 import { getTasks, getSessions, getHistory, persist } from './store.js'
-import { groupQueue, pickCurrent } from './scheduler.js'
+import { groupQueue, pickCurrent, shouldAutoReviveAll } from './scheduler.js'
 import { broadcast } from './bus.js'
 import { renderCommand } from './config.js'
 
@@ -32,11 +32,19 @@ export function buildQueue() {
       .filter(Boolean)
     return { ...t, sessionDetails: linked }
   }
+  // 跳过聚合：当前在队列里(current+waiting+deferred)累计被跳过的总次数与涉及任务数，
+  // 供面板展示「这段时间跳过了多少」。
+  const inQueue = [groups.current, ...groups.waiting, ...groups.deferred].filter(Boolean)
+  const skippedTotal = inQueue.reduce((n, t) => n + (t.skipCount || 0), 0)
+  const skippedTasks = inQueue.filter((t) => (t.skipCount || 0) > 0).length
+
   return {
     current: attach(groups.current),
     waiting: groups.waiting.map(attach),
     deferred: groups.deferred.map(attach),
     done: groups.done.map(attach),
+    skippedTotal,
+    skippedTasks,
   }
 }
 
@@ -72,7 +80,19 @@ export function buildOverview() {
 }
 
 // 任意会改变队列的操作后调用：持久化 + 广播；若 current 变了额外推 new_current
+// 队列空了(只剩被推迟的任务)就把它们全部唤回:清掉 deferUntil,重新入队。
+// 返回是否发生了变更。在 notifyChange/tickDefer 计算队列前调用,保证「队列一空立即复活」。
+function autoReviveIfEmpty() {
+  const { tasks } = getTasks()
+  if (!shouldAutoReviveAll(tasks)) return false
+  for (const t of tasks) {
+    if (t.deferUntil && t.status !== 'done' && t.status !== 'skipped') t.deferUntil = null
+  }
+  return true
+}
+
 export function notifyChange() {
+  autoReviveIfEmpty()
   persist('tasks')
   const queue = buildQueue()
   broadcast({ type: 'queue_updated', queue })
@@ -138,6 +158,22 @@ export function createTask(input = {}) {
 // 返回是否发生了「值得让面板冒出来」的变化（waiting/completed 等）
 const LIVE_RANK = { hook: 2, scan: 1 }
 
+// ── 复活规则（纯函数，根因层，可单测）──
+// 已处理完（done）/已移除（dismissed）的会话，只在「收到该会话新的 waiting hook 事件」
+// 时才复活——说明又有新的事要你处理。scan 的近似态（idle/waiting）不得把已处理的
+// 任务/会话打回队列，否则点完成后会被周期扫描反复复活（问题 1 的根因）。
+export function shouldRevive(rec) {
+  return rec?.liveState === 'waiting' && rec?.source === 'hook'
+}
+
+// ── 空会话判定（纯函数）──
+// 无真实用户消息（transcript 全是注入/系统/空）的会话不该建隐式 task、不该入队。
+// rec.hasRealUserMsg 由来源（scanner/events）每次带上 → 动态判定：后续该会话有了
+// 真实用户消息，下一轮即冒出来。缺省 undefined 视为「未知 → 不过滤」（向后兼容旧来源）。
+export function isEmptySession(rec) {
+  return rec?.hasRealUserMsg === false
+}
+
 export function upsertFromAgent(rec) {
   if (!rec || !rec.claudeSessionId) return false
   const now = rec.eventAt || Date.now()
@@ -190,14 +226,21 @@ export function upsertFromAgent(rec) {
     session.lastActiveAt = now
   }
 
-  // 已 dismiss 的会话：除非来了新的 waiting 事件，否则不复活
+  // 已 dismiss 的会话：除非来了新的 waiting hook 事件，否则不复活
   if (session.dismissed) {
-    if (rec.liveState === 'waiting' && rec.source === 'hook') {
+    if (shouldRevive(rec)) {
       session.dismissed = false
     } else {
       persist('sessions')
       return false
     }
+  }
+
+  // 空会话（无真实用户消息）：不建隐式 task、不入队。
+  // 已有 task 的不在此拦截（曾有真实内容，状态另算）；动态——后续有真实消息即放行。
+  if (isEmptySession(rec) && !session.taskId) {
+    persist('sessions')
+    return false
   }
 
   // 找/建该 session 对应的隐式 task
@@ -223,9 +266,9 @@ export function upsertFromAgent(rec) {
     taskStore.tasks.push(task)
     session.taskId = task.id
   } else {
-    // 同步标题（会话 summary 可能后补）+ 若已完成又来新事件则重新入队
+    // 同步标题（会话 summary 可能后补）+ 已完成的任务只在新 waiting hook 事件时复活
     if (session.label) task.title = session.label
-    if (task.status === 'done' && rec.liveState === 'waiting') {
+    if (task.status === 'done' && shouldRevive(rec)) {
       task.status = 'queued'
       task.queuedAt = now
       task.completedAt = null
@@ -302,6 +345,17 @@ export function deferTask(id, minutes = 60) {
   return task
 }
 
+// 提前唤回：清掉 deferUntil，任务立即重新参与排序
+export function undeferTask(id) {
+  const data = getTasks()
+  const task = data.tasks.find((t) => t.id === id)
+  if (!task) return null
+  task.deferUntil = null
+  task.queuedAt = Date.now() // 唤回即视为「现在又要看它」，排到同档末尾
+  notifyChange()
+  return task
+}
+
 // defer 到点的任务需要重新浮现 — 由定时器周期性触发重算
 export function tickDefer() {
   const { tasks } = getTasks()
@@ -309,6 +363,9 @@ export function tickDefer() {
   const due = tasks.some((t) => t.deferUntil && t.deferUntil <= now)
   if (due) {
     for (const t of tasks) if (t.deferUntil && t.deferUntil <= now) t.deferUntil = null
+    notifyChange()
+  } else if (shouldAutoReviveAll(tasks, now)) {
+    // 没有到点的,但队列已空、只剩被推迟的 → 全部唤回(notifyChange 内做实际清空)
     notifyChange()
   }
 }
