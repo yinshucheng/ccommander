@@ -1165,7 +1165,7 @@ code,
   display: flex;
   flex-direction: column;
   font-size: 13px;
-  line-height: 1.55;
+  line-height: 1.68;
   padding: 9px 0 11px;
 }
 /* 角色小标题：横排一行，淡色、字距拉开，明确「谁在说」 */
@@ -1179,13 +1179,9 @@ code,
   margin-bottom: 5px;
   opacity: 0.75;
 }
-.ctx-msg.user .ctx-role {
-  color: var(--p2);
-}
-.ctx-msg.assistant .ctx-role {
-  color: var(--accent);
-}
-/* tool 角色不另立标题——工具行本身带图标，标题反而成噪音 */
+/* 「AI」标识冗余——用户消息已是右侧气泡，其余默认即 AI，不必再立标题。
+   assistant / tool 角色标题一并隐去（user 在下方气泡规则里另行隐藏）。 */
+.ctx-msg.assistant .ctx-role,
 .ctx-msg.tool .ctx-role {
   display: none;
 }
@@ -1194,6 +1190,29 @@ code,
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+/* 用户消息：AI chat 常见的右侧气泡；AI / 工具保持左侧平铺。
+   用气泡+右对齐区分「谁在说」，「你」标题反而冗余，隐去。 */
+.ctx-msg.user {
+  align-items: flex-end;
+}
+.ctx-msg.user .ctx-role {
+  display: none;
+}
+.ctx-msg.user .ctx-parts {
+  max-width: 80%;
+  background: rgba(79, 140, 255, 0.12);
+  border: 1px solid rgba(79, 140, 255, 0.22);
+  border-radius: 12px 12px 3px 12px;
+  padding: 8px 12px;
+}
+/* 气泡内的 markdown 首尾段不要额外撑高气泡 */
+.ctx-msg.user .ctx-parts .ctx-text.md > :first-child {
+  margin-top: 0;
+}
+.ctx-msg.user .ctx-parts .ctx-text.md > :last-child {
+  margin-bottom: 0;
 }
 .ctx-text {
   color: var(--fg);
@@ -1209,7 +1228,7 @@ code,
   margin-bottom: 0;
 }
 .ctx-text.md p {
-  margin: 4px 0;
+  margin: 12px 0;
 }
 .ctx-text.md h1,
 .ctx-text.md h2,
@@ -1222,11 +1241,11 @@ code,
 }
 .ctx-text.md ul,
 .ctx-text.md ol {
-  margin: 4px 0;
+  margin: 8px 0;
   padding-left: 18px;
 }
 .ctx-text.md li {
-  margin: 2px 0;
+  margin: 4px 0;
 }
 .ctx-text.md code {
   background: rgba(255, 255, 255, 0.09);
@@ -1542,35 +1561,35 @@ code,
 }
 
 /* ===== 结构化对话 parts =====
-   工具调用渲染成轻量内联行,而非带边框/底色的卡片(对齐 Codex)。
-   仅靠左侧一条淡 accent 竖线锚定边界,展开才显细节。 */
+   工具调用渲染成轻量小卡：轻底色 + 圆角 + 左侧 accent 竖线锚定边界,
+   头部「动词加粗实色 + 关键参数(文件名/命令)淡等宽」拉开层次,展开才显细节。 */
+/* 工具卡片：轻底色 + 圆角 + 左侧 accent 竖线，从「光秃竖线」升级成一眼可辨的小卡。 */
 .part-card {
-  border: none;
-  border-left: 2px solid var(--border);
-  border-radius: 0;
-  background: transparent;
-  padding-left: 1px;
+  border: 1px solid var(--border);
+  border-left: 2px solid color-mix(in srgb, var(--accent) 45%, var(--border));
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.022);
   overflow: hidden;
 }
 .part-card.err {
-  border-left-color: rgba(255, 92, 92, 0.55);
+  border-left-color: rgba(255, 92, 92, 0.6);
 }
 .part-head {
   display: flex;
   align-items: center;
   gap: 7px;
   width: 100%;
-  padding: 3px 8px;
+  padding: 5px 9px;
   background: transparent;
   border: none;
   color: var(--text);
   font-size: 12px;
   cursor: pointer;
   text-align: left;
-  border-radius: 4px;
+  border-radius: 5px;
 }
 .part-head:hover {
-  background: rgba(255, 255, 255, 0.045);
+  background: rgba(255, 255, 255, 0.05);
 }
 .part-caret {
   color: var(--muted);
@@ -1579,13 +1598,15 @@ code,
 }
 .part-icon {
   flex-shrink: 0;
-  opacity: 0.85;
+  opacity: 0.9;
 }
+/* 动词/工具名：实文色加粗，作主体；与淡色参数拉开层次 */
 .part-title {
   font-weight: 600;
   flex-shrink: 0;
-  color: var(--muted);
+  color: var(--text);
 }
+/* 关键参数（文件名 / 命令 / pattern）：次文色 + 等宽，确保「在编辑哪个文件」一眼可见 */
 .part-sub {
   color: var(--muted);
   font-size: 11.5px;
@@ -1594,9 +1615,9 @@ code,
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-/* 展开体缩进对齐到 head 文本起点(caret 10 + gap 7 + 左 padding 8) */
+/* 展开体缩进对齐到 head 文本起点(caret 10 + gap 7 + 左 padding 9) */
 .part-body {
-  padding: 4px 0 6px 25px;
+  padding: 4px 9px 8px 26px;
 }
 .part-empty {
   color: var(--muted);
@@ -1789,24 +1810,29 @@ code,
 }
 
 /* 单行折叠（Digest 档：thinking / 工具收成一行，可点开） */
+/* 折叠态单行（digest 默认档最常见）：轻卡片 + 左竖线，参数清楚、可点开。 */
 .collapsed-line {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 7px;
   width: 100%;
   text-align: left;
-  background: transparent;
-  border: none;
-  color: var(--muted);
+  background: rgba(255, 255, 255, 0.022);
+  border: 1px solid var(--border);
+  border-left: 2px solid color-mix(in srgb, var(--accent) 38%, var(--border));
+  color: var(--text);
   font-size: 12px;
-  padding: 2px 4px;
+  font-family: ui-monospace, monospace;
+  padding: 4px 9px;
   margin: 1px 0;
   cursor: pointer;
-  border-radius: 4px;
+  border-radius: 6px;
 }
 .collapsed-line:hover {
-  background: var(--panel-2);
-  color: var(--text);
+  background: rgba(255, 255, 255, 0.06);
+}
+.collapsed-line.err {
+  border-left-color: rgba(229, 83, 75, 0.6);
 }
 .collapsed-line.err {
   color: var(--danger, #e5534b);
