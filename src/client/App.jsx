@@ -6,6 +6,7 @@ import AddTask from './AddTask.jsx'
 import Settings from './Settings.jsx'
 import RailBar from './RailBar.jsx'
 import { countByState } from './board-group.js'
+import { resolveCurrent, selectedExists } from './review-select.js'
 
 const VIEW_KEY = 'commander.view'
 const PIN_KEY = 'commander.railPinned'
@@ -15,6 +16,8 @@ export default function App() {
   const [view, setView] = useState(() => localStorage.getItem(VIEW_KEY) || 'review')
   const [railPinned, setRailPinned] = useState(() => localStorage.getItem(PIN_KEY) === '1')
   const [boardScrollTo, setBoardScrollTo] = useState(null)
+  // 批阅视图里被「钉住」的 task：从面板点「批阅」跳转时设；为 null 则跟随队列头部 current。
+  const [selectedId, setSelectedId] = useState(null)
   const [showAdd, setShowAdd] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
   const [connected, setConnected] = useState(false)
@@ -69,7 +72,13 @@ export default function App() {
     }
   }, [])
 
-  const current = queue.current
+  // 批阅视图显示的 task：钉住了就显示钉住的，否则回落到队列头部 current（见 review-select.js）
+  const current = resolveCurrent(queue, selectedId)
+
+  // 钉住的 task 已不在活跃队列里(被完成/移除) → 自动解除钉住，回到跟随 current
+  useEffect(() => {
+    if (selectedId != null && !selectedExists(queue, selectedId)) setSelectedId(null)
+  }, [selectedId, queue])
 
   // 批阅动作反馈:刚生效的动作 → 一条带撤销窗口的 toast。
   // { kind: 'done'|'skip'|'defer'|'dismiss', title, undo?: () => Promise }
@@ -140,6 +149,12 @@ export default function App() {
     }
   }
 
+  // 从面板某行「批阅」跳转：钉住该 task 并切到批阅视图
+  const goReview = (taskId) => {
+    setSelectedId(taskId)
+    setView('review')
+  }
+
   const TOAST_LABEL = { done: '已完成', skip: '已跳过', defer: '已稍后', dismiss: '已移除' }
   const TOAST_ICON = { done: '✓', skip: '→', defer: '⏰', dismiss: '✕' }
 
@@ -172,6 +187,7 @@ export default function App() {
               queue={queue}
               api={api}
               onAct={act}
+              onReview={goReview}
               deferDefault={deferDefault}
               scrollTo={boardScrollTo}
               onScrolled={() => setBoardScrollTo(null)}

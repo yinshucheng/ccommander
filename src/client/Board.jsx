@@ -29,7 +29,7 @@ const DIMENSIONS = [
 const GROUPBY_KEY = 'commander.board.groupBy'
 
 // 行内操作：done/skip/defer 复用 App 的 act（含 refresh + toast）。
-function BoardRow({ t, api, onAct, deferDefault, deferred }) {
+function BoardRow({ t, api, onAct, onReview, deferDefault, deferred }) {
   const proj = (t.sessionDetails || [])[0]
   const projName = proj?.projectName
   const branch = proj?.gitBranch
@@ -51,6 +51,13 @@ function BoardRow({ t, api, onAct, deferDefault, deferred }) {
       )}
       <span className="br-age">{deferred ? deferLeft(t.deferUntil) : age(t.queuedAt)}</span>
       <span className="br-acts">
+        <button
+          className="q-act"
+          title="进批阅视图细看这个会话"
+          onClick={() => onReview?.(t.id)}
+        >
+          📖 批阅
+        </button>
         {deferred ? (
           <button
             className="q-act"
@@ -150,7 +157,7 @@ function NewSessionInline({ workingDir, api, onDone, onCancel }) {
   )
 }
 
-export default function Board({ queue, api, onAct, deferDefault = 30, scrollTo, onScrolled }) {
+export default function Board({ queue, api, onAct, onReview, deferDefault = 30, scrollTo, onScrolled }) {
   const [groupBy, setGroupBy] = useState(
     () => localStorage.getItem(GROUPBY_KEY) || 'project'
   )
@@ -249,6 +256,7 @@ export default function Board({ queue, api, onAct, deferDefault = 30, scrollTo, 
                   t={t}
                   api={api}
                   onAct={onAct}
+                  onReview={onReview}
                   deferDefault={deferDefault}
                   deferred={t._seg === 'deferred'}
                 />
