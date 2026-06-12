@@ -72,7 +72,8 @@ export function planView(msgs, mode) {
   // 跨消息的连续过程（工具/thinking）累积进同一个组、直到下一个可见 part 才 flush（BUG-2）。
   //
   // 节点两种：
-  //   { type:'msg', role, parts }   talk 下 parts 只含该可见运行段的 part，全部按 show 渲染
+  //   { type:'msg', role, msg, parts }   talk 下 parts 只含该可见运行段的 part，全部按 show 渲染；
+  //                                       msg 为触发该段的源消息，渲染层据此取 key(seq)/兜底
   //   { type:'tool-group', parts, hasError }
   const out = []
   let group = null // 累积中的 tool-group
@@ -103,7 +104,9 @@ export function planView(msgs, mode) {
         flushGroup()
         if (!run || run.role !== msg.role) {
           flushRun()
-          run = { type: 'msg', role: msg.role, parts: [], partModes: [] }
+          // 带上 msg：渲染层(TaskCard)用 item.msg 取稳定 key(msg.seq)并兜底 role/text，
+          // 节点契约与 digest/full 及上面的无-parts 分支统一。漏了它会让 item.msg.seq 崩。
+          run = { type: 'msg', role: msg.role, msg, parts: [], partModes: [] }
         }
         run.parts.push(p)
         run.partModes.push('show')

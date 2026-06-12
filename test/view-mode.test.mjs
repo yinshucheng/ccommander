@@ -119,6 +119,20 @@ test('talk 不变量：每个 part 恰好渲染一次（带重数，防丢失也
   }
 })
 
+// 回归：talk 档的可见运行段节点曾漏 `msg` 字段，TaskCard 渲染时 `item.msg.seq`
+// 取 undefined.seq 抛 TypeError，整个面板白屏崩溃。节点契约必须与 digest/full 统一：
+// 每个 type:'msg' 节点都带 msg，渲染层据此取稳定 key / 兜底 role+text。
+test('talk 渲染契约：每个 msg 节点都带 msg（防 item.msg.seq 崩溃）', () => {
+  for (const mode of ['full', 'digest', 'talk']) {
+    const plan = planView(msgs, mode)
+    for (const item of plan) {
+      if (item.type !== 'msg') continue
+      assert.ok(item.msg, `${mode} 档存在缺 msg 的 msg 节点（会导致 item.msg.seq 崩溃）`)
+      assert.equal(typeof item.msg.seq, 'number', `${mode} 档 msg.seq 应可取`)
+    }
+  }
+})
+
 test('toolSummary：动词 + 关键入参（base 取文件名）', () => {
   assert.equal(toolSummary({ name: 'Read', input: { file_path: '/a/b/App.jsx' } }), '📄 读取 App.jsx')
   assert.equal(toolSummary({ name: 'Bash', input: { command: 'pnpm test' } }), '❯ Bash pnpm test')

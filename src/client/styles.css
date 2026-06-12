@@ -1159,20 +1159,25 @@ code,
   opacity: 0.5;
   cursor: default;
 }
+/* 一条 turn 一个纵向块：角色作内容上方的淡色小标题，turn 之间靠留白分隔（无逐条分割线）。
+   对齐 Codex 风格——历史靠呼吸的留白断句，而非账本式的 hairline。 */
 .ctx-msg {
   display: flex;
-  gap: 8px;
+  flex-direction: column;
   font-size: 13px;
-  line-height: 1.45;
-  padding: 4px 0;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  line-height: 1.55;
+  padding: 9px 0 11px;
 }
+/* 角色小标题：横排一行，淡色、字距拉开，明确「谁在说」 */
 .ctx-role {
-  flex-shrink: 0;
-  width: 28px;
+  display: block;
   font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
   color: var(--muted);
-  text-align: right;
+  margin-bottom: 5px;
+  opacity: 0.75;
 }
 .ctx-msg.user .ctx-role {
   color: var(--p2);
@@ -1180,12 +1185,15 @@ code,
 .ctx-msg.assistant .ctx-role {
   color: var(--accent);
 }
+/* tool 角色不另立标题——工具行本身带图标，标题反而成噪音 */
+.ctx-msg.tool .ctx-role {
+  display: none;
+}
 .ctx-parts {
-  flex: 1;
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
 }
 .ctx-text {
   color: var(--fg);
@@ -1533,31 +1541,36 @@ code,
   font-variant-numeric: tabular-nums;
 }
 
-/* ===== 结构化对话 parts ===== */
+/* ===== 结构化对话 parts =====
+   工具调用渲染成轻量内联行,而非带边框/底色的卡片(对齐 Codex)。
+   仅靠左侧一条淡 accent 竖线锚定边界,展开才显细节。 */
 .part-card {
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: rgba(255, 255, 255, 0.02);
+  border: none;
+  border-left: 2px solid var(--border);
+  border-radius: 0;
+  background: transparent;
+  padding-left: 1px;
   overflow: hidden;
 }
 .part-card.err {
-  border-color: rgba(255, 92, 92, 0.5);
+  border-left-color: rgba(255, 92, 92, 0.55);
 }
 .part-head {
   display: flex;
   align-items: center;
   gap: 7px;
   width: 100%;
-  padding: 5px 9px;
-  background: rgba(255, 255, 255, 0.03);
+  padding: 3px 8px;
+  background: transparent;
   border: none;
   color: var(--text);
   font-size: 12px;
   cursor: pointer;
   text-align: left;
+  border-radius: 4px;
 }
 .part-head:hover {
-  background: rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.045);
 }
 .part-caret {
   color: var(--muted);
@@ -1566,10 +1579,12 @@ code,
 }
 .part-icon {
   flex-shrink: 0;
+  opacity: 0.85;
 }
 .part-title {
   font-weight: 600;
   flex-shrink: 0;
+  color: var(--muted);
 }
 .part-sub {
   color: var(--muted);
@@ -1579,8 +1594,9 @@ code,
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* 展开体缩进对齐到 head 文本起点(caret 10 + gap 7 + 左 padding 8) */
 .part-body {
-  padding: 6px 9px 8px;
+  padding: 4px 0 6px 25px;
 }
 .part-empty {
   color: var(--muted);
@@ -1685,9 +1701,9 @@ code,
   line-height: 1.5;
 }
 
-/* TodoWrite 清单 */
+/* TodoWrite 清单：保留左侧淡竖线锚定，内边距对齐其它 part 行 */
 .part-card.todo {
-  padding: 7px 10px;
+  padding: 5px 0 6px 10px;
 }
 .todo-head {
   font-size: 12px;
@@ -1805,7 +1821,7 @@ code,
   white-space: nowrap;
 }
 
-/* Talk 档：被隐藏的连续工具/thinking 占位条 */
+/* Talk 档：被隐藏的连续工具/thinking 占位条 —— 轻量文字行，去掉重虚线框 */
 .tool-group-bar {
   display: flex;
   align-items: center;
@@ -1813,24 +1829,26 @@ code,
   width: 100%;
   text-align: left;
   background: transparent;
-  border: 1px dashed var(--border);
+  border: none;
+  border-left: 2px solid var(--border);
   color: var(--muted);
   font-size: 12px;
-  padding: 4px 8px;
-  margin: 4px 0;
+  font-style: italic;
+  padding: 3px 8px;
+  margin: 2px 0;
   cursor: pointer;
-  border-radius: 6px;
+  border-radius: 4px;
 }
 .tool-group-bar:hover {
-  background: var(--panel-2);
+  background: rgba(255, 255, 255, 0.045);
   color: var(--text);
 }
 .tool-group-bar.err {
-  border-color: rgba(229, 83, 75, 0.5);
+  border-left-color: rgba(229, 83, 75, 0.55);
   color: var(--danger, #e5534b);
 }
 .tool-group-bar.on {
-  border-style: solid;
+  font-style: normal;
   margin-bottom: 4px;
 }
 .tool-group-open {
