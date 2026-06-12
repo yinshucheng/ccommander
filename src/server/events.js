@@ -6,7 +6,9 @@ import { upsertFromAgent } from './tasks.js'
 const COMMANDER_DIR = join(homedir(), '.commander')
 const EVENTS_FILE = join(COMMANDER_DIR, 'events.jsonl')
 
-// 事件类型 → liveState
+// emit 脚本写入的事件名 → liveState。
+// 注意:这里的 waiting 是 emit 脚本归一化后的结果,上游 hook 已用 matcher 精筛
+// (只有 Notification 的 idle_prompt/permission_prompt 才会 emit waiting),详见 install-hooks.js。
 const EVENT_STATE = {
   waiting: 'waiting',
   completed: 'completed',
