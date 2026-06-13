@@ -4,6 +4,7 @@
 #
 # 用法：
 #   scripts/wt.sh new <slug>        创建 worktree（.worktrees/<slug>，分支 feat/<slug>，从 origin/main 起）
+#   scripts/wt.sh impl <spec编号>   按已定稿 spec 开实现 worktree（slug 取自文件名 + spec 置 in-progress）
 #   scripts/wt.sh list              列出所有 worktree、分支、分配端口、该端口是否在跑
 #   scripts/wt.sh serve [<slug>]    在当前/指定 worktree 的专属端口起服务（缺 dist 先 build）
 #   scripts/wt.sh restart [<slug>]  只杀该 worktree 端口的 server 后重起（替代无差别的 pkill -f）
@@ -93,9 +94,10 @@ _serve() {
   ( cd "$dir" && COMMANDER_PORT="$port" exec node bin/commander.js serve --port "$port" )
 }
 
-cmd_new() {
-  local slug="${1:-}"
-  [[ -n "$slug" ]] || die "用法: wt.sh new <slug>"
+# 建 worktree 的核心：校验 slug、从 origin/main 起分支、分配端口、装依赖。
+# new 与 impl 共用,避免逻辑重复。打印「✓ worktree 就绪」后由调用方追加各自指引。
+_create_worktree() {
+  local slug="$1"
   [[ "$slug" =~ ^[a-z0-9][a-z0-9._-]*$ ]] || die "slug 只能用小写字母/数字/.-_，且以字母数字开头"
   [[ ! -d "$WT_DIR/$slug" ]] || die "worktree 已存在: $slug"
 
@@ -112,20 +114,71 @@ cmd_new() {
 
   echo "→ 安装依赖（pnpm install）…"
   ( cd "$WT_DIR/$slug" && pnpm install )
+}
 
+# 打印开工指引（new / impl 收尾共用）
+_print_ready() {
+  local slug="$1" extra="${2:-}"
+  local port; port="$(port_of "$WT_DIR/$slug")"
   cat <<EOF
 
 ✓ worktree 就绪
   目录:   .worktrees/$slug
-  分支:   $branch
+  分支:   feat/$slug
   端口:   $port
-
+${extra}
   开工：
     cd .worktrees/$slug
     ../../scripts/wt.sh serve          # 起服务在 ${port}（缺 dist 自动 build）
     ../../scripts/wt.sh restart        # 改后端后只重启这个 server
 EOF
 }
+
+cmd_new() {
+  local slug="${1:-}"
+  [[ -n "$slug" ]] || die "用法: wt.sh new <slug>"
+  _create_worktree "$slug"
+  _print_ready "$slug"
+}
+
+# impl <spec编号>：为某个已定稿的 spec 开实现 worktree。
+# slug 从 specs/NNN-<slug>.md 的文件名派生,并把该 spec 状态推进到 in-progress。
+cmd_impl() {
+  local num="${1:-}"
+  [[ -n "$num" ]] || die "用法: wt.sh impl <spec编号>（如 wt.sh impl 015）"
+  [[ "$num" =~ ^[0-9]+$ ]] || die "spec 编号需为数字: $num"
+  # 容忍传 15 或 015
+  printf -v num '%03d' "$((10#$num))"
+
+  # 用 glob 找 spec（nullglob 让无匹配时展开为空,不触发 set -e）
+  local matches=()
+  shopt -s nullglob
+  matches=("$MAIN_ROOT"/specs/${num}-*.md)
+  shopt -u nullglob
+  [[ ${#matches[@]} -gt 0 ]] || die "找不到 spec: specs/${num}-*.md（先在 main 写好 spec 文档）"
+  local spec="${matches[0]}"
+
+  # slug = 文件名去掉 NNN- 前缀和 .md 后缀
+  local base; base="$(basename "$spec" .md)"
+  local slug="${base#${num}-}"
+
+  echo "→ 实现 spec: $spec  →  slug=$slug"
+  _create_worktree "$slug"
+
+  # 把 worktree 内那份 spec 的状态推进到 in-progress（只动 worktree 里的副本,
+  # main 上的 spec 状态在合并时随分支一起带回,不在此处改 main）
+  local wt_spec="$WT_DIR/$slug/specs/${num}-${slug}.md"
+  if [[ -f "$wt_spec" ]]; then
+    # 仅当当前是 proposed/accepted 才推进,避免覆盖已有的更晚状态
+    sed -i.bak -E 's/^(- \*\*状态\*\*: )(proposed|accepted)/\1in-progress/' "$wt_spec" && rm -f "$wt_spec.bak"
+    echo "→ 已把 worktree 内 ${num} spec 状态推进到 in-progress"
+  fi
+
+  _print_ready "$slug" "  spec:   ${spec}（worktree 内已置 in-progress）
+"
+}
+
+
 
 cmd_list() {
   printf "%-24s %-22s %-6s %s\n" "WORKTREE" "BRANCH" "PORT" "RUNNING"
@@ -211,11 +264,12 @@ cmd_rm() {
 }
 
 usage() {
-  sed -n '2,14p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  sed -n '2,15p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 case "${1:-}" in
   new)     shift; cmd_new "$@" ;;
+  impl)    shift; cmd_impl "$@" ;;
   list|ls) shift; cmd_list "$@" ;;
   serve)   shift; cmd_serve "$@" ;;
   restart) shift; cmd_restart "$@" ;;

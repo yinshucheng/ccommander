@@ -83,6 +83,9 @@ Commander 的 `specs/` 里同时躺着多个互相独立的待办特性（Codex 
 wt.sh new <slug>        # git worktree add .worktrees/<slug> -b feat/<slug> origin/main
                         #   + 算端口写 .worktrees/<slug>/.commander-port + pnpm install（worktree 需独立 node_modules 软链或安装）
                         #   + 打印「cd .worktrees/<slug> && ../../scripts/wt.sh serve」
+wt.sh impl <spec编号>   # 【spec 驱动首选】按 specs/NNN-<slug>.md 一键开实现 worktree:
+                        #   从文件名派生 slug → 复用 new 的建树逻辑 → 把 worktree 内那份 spec 置 in-progress
+                        #   （spec 设计期留在 main 写,accepted 后用本命令开工——见 CLAUDE.md「标准流程」）
 wt.sh list              # 遍历 git worktree list，对每个读 .commander-port，lsof 查该端口在跑否
 wt.sh serve [<slug>]    # 读当前/指定 worktree 的 .commander-port，COMMANDER_PORT=<port> 起 serve（缺 dist 先 build）
 wt.sh restart [<slug>]  # lsof -nP -iTCP:<port> -sTCP:LISTEN 取 PID → kill → serve（只杀这个端口）
