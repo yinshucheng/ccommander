@@ -74,7 +74,13 @@ Claude Code hook ──► ~/.commander/events.jsonl ──► events.js（tail 
 
 ### 网页续话（`converse.js`）
 
-面板里给某会话发消息 → 在该会话 `workingDir` 下 spawn `<launcher> -p <text> --resume <sid> --output-format stream-json`,解析 stream-json 增量,经 ws `type:'converse'` 推前端。**launcher 从 `cmdTemplate` 派生**(取 `--resume` 之前的前缀):新装的默认是原生 `claude --dangerously-skip-permissions`,老配置(缺 `cmdTemplate` 字段)沿用旧默认 `ccr code`(`config.js` `LEGACY_CMD_TEMPLATE`)。**`running` 态会话禁止网页注入**(可能有活终端),并发单飞,5 分钟超时。
+面板里给某会话发消息 → 在该会话 `workingDir` 下起一个**长驻** `<launcher> --resume <sid> --input-format stream-json --output-format stream-json` 进程(spec 015,取代旧的 `-p` 短命模式),把消息编码成 NDJSON `{type:'user',...}` 写进它 stdin;解析 stream-json 增量经 ws `type:'converse'` 推前端。进程随会话存活(多轮共享上下文)、空闲超时回收。**launcher 从 `cmdTemplate` 派生**(取 `--resume` 之前的前缀):新装默认原生 `claude --dangerously-skip-permissions`,老配置(缺 `cmdTemplate`)沿用旧默认 `ccr code`(`config.js` `LEGACY_CMD_TEMPLATE`)。
+
+**交互式权限审批 / 澄清 / 计划(L1+L2)**:放行与否**派生自 `cmdTemplate`**——含 `--dangerously-skip-permissions` → 全放行,不挂权限工具(实测 skip 模式下 `--permission-prompt-tool` 根本不被调用);**不含 skip** → 挂内置 perm MCP server(`perm-server.js`,独立 stdio 子进程)+ `--permission-mode default --permission-prompt-tool mcp__commander__approve`。Claude 想用工具/反问(`AskUserQuestion`/`ExitPlanMode`)时调 perm 工具 → perm-server 经回环 HTTP(`/internal/permission`,token 校验,绑 127.0.0.1)转交主进程 → `perm-registry.js` 按 `tool_use_id` 挂起 + ws 广播 `permission_request` → 前端弹审批/澄清/计划卡片 → 用户答复走 `POST /api/sessions/:sid/permission` 回灌 → resolve → perm 工具返回 `{behavior,updatedInput?,message?}`。**fail-closed**:缺 tool_use_id / 超时(5min)/ 会话回收一律 deny,绝不静默放行。决定校验是 `permission.js` 的纯函数(可测)。
+
+**进程注入保护(长驻下重定义)**:`running` 态会话,若**我们自己没有持有它的长驻进程**(说明可能是真终端在跑)→ 禁止注入;我们持有的长驻进程不算「别处」,允许继续。并发单飞,5 分钟空闲回收。
+
+> **L3(同步「上朝面奏」:逐字流 + 守着等回复 + 连续即时往返)未做**,但本特性已把长驻进程模型/stdin 回灌/权限通道这些地基铺好,L3 是其上的增量,不返工。见 spec 015 末尾。
 
 ### 前端
 

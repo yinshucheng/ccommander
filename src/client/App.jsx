@@ -63,6 +63,9 @@ export default function App() {
         const msg = JSON.parse(ev.data)
         if (msg.type === 'queue_updated') setQueue(msg.queue)
         else if (msg.type === 'converse') emitConverse(msg)
+        // 权限审批/澄清/计划请求与落定：复用 converse 的 pub/sub（带 sid，TaskCard 自行过滤）
+        else if (msg.type === 'permission_request' || msg.type === 'permission_resolved')
+          emitConverse(msg)
       }
     }
     connect()

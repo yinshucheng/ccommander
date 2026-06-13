@@ -28,6 +28,7 @@ import { getConfig, patchConfig } from './config.js'
 import { getSessionContext } from './transcript.js'
 import { analyzeSession } from './analyze.js'
 import { sendMessage, saveUploads, startSession } from './converse.js'
+import { requestPermission, resolvePermission, checkToken, setInternalUrl } from './perm-registry.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const DIST = join(__dirname, '../../dist')
@@ -161,6 +162,30 @@ export function startServer({ port = 3890 } = {}) {
     res.status(r.status || 200).json(r)
   })
 
+  // ---- 权限审批（spec 015）----
+  // 内部端点：perm-server.js（我们 spawn 的 MCP 子进程）POST 进来一个权限请求并长轮询，
+  // 我们挂起、广播 permission_request 给前端，用户答复后才 res.json({decision})。
+  // token 校验防本机其它进程伪造；只绑在本地（与整个 server 同 host）。
+  app.post('/internal/permission', express.json({ limit: '5mb' }), async (req, res) => {
+    if (!checkToken(req.body?.token)) return res.status(403).json({ error: 'forbidden' })
+    const decision = await requestPermission({
+      sid: req.body?.sid || '',
+      tool_name: req.body?.tool_name || '',
+      input: req.body?.input ?? {},
+      tool_use_id: req.body?.tool_use_id || '',
+    })
+    res.json({ decision })
+  })
+
+  // 公开端点：用户在网页点「允许/拒绝」→ 回灌决定，resolve 对应挂起请求。
+  app.post('/api/sessions/:sid/permission', express.json({ limit: '5mb' }), (req, res) => {
+    const toolUseId = req.body?.tool_use_id || ''
+    const decision = req.body?.decision
+    if (!toolUseId || !decision) return res.status(400).json({ ok: false, error: '缺少 tool_use_id 或 decision' })
+    const hit = resolvePermission(toolUseId, decision)
+    res.json({ ok: hit, matched: hit })
+  })
+
   // ---- Sessions ----
   // 网页内启动全新会话（不带 --resume）：在指定项目目录下 spawn claude -p <text>
   app.post('/api/sessions/new', (req, res) => {
@@ -230,6 +255,8 @@ export function startServer({ port = 3890 } = {}) {
   wss.on('error', onListenError)
 
   server.listen(port, () => {
+    // 权限审批内部端点（perm-server 子进程回连用）：绑本机回环 + 端口
+    setInternalUrl(`http://127.0.0.1:${port}/internal/permission`)
     console.log(`\n  ⚡ Commander 运行在 http://localhost:${port}`)
     console.log(`     hook 事件 → ~/.commander/events.jsonl  |  扫描兜底已启动\n`)
     const report = buildHealthReport({

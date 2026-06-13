@@ -32,6 +32,9 @@ export const api = {
   },
   analyze: (sid) => req(`/api/sessions/${sid}/analyze`, 'POST'),
   send: (sid, text, images) => req(`/api/sessions/${sid}/send`, 'POST', { text, images }),
+  // 权限审批/澄清/计划作答回灌（spec 015）。decision: {behavior:'allow'|'deny', updatedInput?, message?}
+  permission: (sid, toolUseId, decision) =>
+    req(`/api/sessions/${sid}/permission`, 'POST', { tool_use_id: toolUseId, decision }),
   // 启动全新会话：返回 { ok, error? }（不走 req 的 throw，以便拿到 4xx 的 error 文案）
   newSession: async ({ workingDir, text }) => {
     const res = await fetch('/api/sessions/new', {

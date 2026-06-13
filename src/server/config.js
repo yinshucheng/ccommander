@@ -51,6 +51,11 @@ export function getConfig() {
     // 首次写出默认，方便用户直接编辑文件
     writeConfig(cache)
   }
+  // 环境变量覆盖 cmdTemplate（仅当前进程生效，不写盘）：便于 worktree / 测试用不同续话
+  // 模板而不污染全局 ~/.commander/config.json。如演示交互式权限审批时去掉 --skip。
+  if (process.env.COMMANDER_CMD_TEMPLATE) {
+    cache.cmdTemplate = process.env.COMMANDER_CMD_TEMPLATE
+  }
   return cache
 }
 

@@ -1,6 +1,6 @@
 # 015 — 网页续话的交互式权限审批 + 澄清作答（L1 + L2）
 
-- **状态**: proposed
+- **状态**: done（L1+L2 已实现；L3 待另开 spec）
 - **优先级**: 高
 - **作者**: yinshucheng
 - **创建**: 2026-06-12
@@ -21,6 +21,7 @@
 1. **权限工具透传**:default 权限模式 + 本地 stdio MCP server 暴露 `approve` 工具 + `--permission-prompt-tool mcp__perm__approve`。让 Claude `Write` 文件 → **`approve` 被调用**,拿到完整 `{tool_name, input, tool_use_id}`;返回 `{behavior:'deny'}` → Write 被拦、文件未创建、`permission_denials` 有记录、Claude 优雅继续;返回 `{behavior:'allow', updatedInput}` → 文件真创建。
 2. **长驻双向 stream-json**:`--input-format stream-json` 长驻进程,喂两条 user 消息(NDJSON `{type:'user',message:{role:'user',content:[...]}}`),各自得到回复,**同一 sid 全程不变、上下文连续**(第一轮记 42、第二轮答 42)。
 3. **长驻 + 权限同时挂**:长驻进程里触发 Write,`approve` 仍被调用、allow 生效、文件创建、进程不崩。
+4. **skip 与 perm-tool 互斥(已实测)**:带 `--dangerously-skip-permissions` 时 `permissionMode=bypassPermissions`,`--permission-prompt-tool` **完全不被调用**、工具直接执行。→ 实现据此分两条路:**模板含 skip → 不挂 perm 工具(沿用现状,零变化);模板不含 skip → 挂 perm 工具 + `--permission-mode default` 走交互**。不存在「skip 还要 perm 工具返回 allow」的中间态。
 
 → 结论:`长驻进程 + 双向输入 + 权限/澄清回灌` 三者经 ccr 可同时工作。**无需直连原生 claude**(实测直连反而 `model_not_found`——本机模型访问依赖 ccr 路由)。L1/L2/L3 共用**同一个 permission-prompt-tool 通道**:权限审批是它,`AskUserQuestion`/计划确认也是它(answers 通过 permission 回调的 `updatedInput` 回填——见 Agent SDK `canUseTool` 文档)。
 
@@ -44,7 +45,7 @@
 ## 验收标准
 
 - [ ] 续话进程模型改为**长驻 `--input-format stream-json --output-format stream-json`**(不再 `-p` 短命、不再开局 `stdin.end()`);进程随会话存活,消息经 stdin 喂 NDJSON `{type:'user',...}`
-- [ ] 续话权限改为 `--permission-mode default` + `--permission-prompt-tool`;**`autoApprove` 配置项(`~/.commander/config.json`,默认 `true` 保你个人「全放行」体验不变)**——为 `true` 时 perm 工具直接返回 allow(等价旧 skip,但走统一通道、可观测),为 `false` 时走交互审批。给别人用就关掉它。
+- [ ] **放行与否从 `cmdTemplate` 派生,不引入独立开关**:用户的 `cmdTemplate` 已含 `--dangerously-skip-permissions`(如当前默认)→ 全放行,perm 工具直接 allow、不弹审批(尊重用户已表达的「跳过权限」意图);模板不含 skip → 走 `--permission-mode default` + `--permission-prompt-tool` 交互审批。与项目「launcher 从 cmdTemplate 派生」的既有做法一致。
 - [ ] Commander 内置一个本地 permission-prompt MCP server(stdio),作为续话子进程的 `--mcp-config` 注入;ccr 路径下 `mcp_servers` 显示它 `connected`
 - [ ] 工具权限请求经 ws 推到前端,渲染「工具名 + 入参摘要 + 允许/拒绝」;用户决定经 ws 回灌,permission 工具据此返回 `{behavior:'allow'|'deny', updatedInput?, message?}`
 - [ ] `AskUserQuestion` 在前端渲染为可选卡片(复用原生交互语义:多选/Other/preview),答案经 `updatedInput.answers` 回填
@@ -71,8 +72,8 @@
    │                          │                                      │
    │                          │   Claude 想用工具/反问 → 调 approve ──┤
    │                          │◄── perm server 收到 {tool_name,input,tool_use_id}
-   │  ◄─ ws permission_request ┤   (autoApprove=true → 直接 allow,不弹;
-   │  (渲染审批/澄清/计划卡片)  │    false → 挂起,等前端答)
+   │  ◄─ ws permission_request ┤   (模板含 skip → 直接 allow,不弹;
+   │  (渲染审批/澄清/计划卡片)  │    不含 → 挂起,等前端答)
    │  ── ws permission_reply ─►│                                      │
    │     {tool_use_id,decision}│   resolve 挂起请求 ──────────────────►│
    │                          │   approve 返回 behavior/updatedInput  │ Claude 据此继续
@@ -124,7 +125,7 @@
 1. **实测固化**:把背景里的 ccr 透传探测沉淀成一个可重跑的脚本/测试夹具(确认机制在 CI/本机稳定)。
 2. **内置 perm MCP server**:`src/server/perm-server.js` + 独立入口;`--mcp-config` 动态生成(指向该入口);与主进程的回环通道。
 3. **主进程接线**:permission 请求 → ws `permission_request`;前端 `permission_reply` → resolve 挂起请求。请求表按 `tool_use_id` 配对 + 超时兜底(默认 deny)。
-4. **converse.js 改造(进程模型)**:`-p` 短命 + `stdin.end()` → 长驻 stream-json 进程 + 持有 stdin + 按 `tool_use_id` 配对;argv 去掉无条件 skip,加 `--input-format stream-json --permission-mode default --mcp-config … --permission-prompt-tool …`;`autoApprove` 开关分支(默认 true→直接 allow)。生命周期/进程治理/`running` 保护重定义。
+4. **converse.js 改造(进程模型)**:`-p` 短命 + `stdin.end()` → 长驻 stream-json 进程 + 持有 stdin + 按 `tool_use_id` 配对;加 `--input-format stream-json --mcp-config … --permission-prompt-tool …`。**放行派生自 cmdTemplate**:模板含 skip → perm 工具直接 allow(且 `--permission-mode` 沿用模板里的);模板不含 skip → `--permission-mode default` 走交互。生命周期/进程治理/`running` 保护重定义。
 5. **前端渲染**:ws 类型 + 审批/澄清/计划三种卡片;复用 `toolSummary`/parts 风格;遵守 005 焦点约束。
 6. **回归测试**:决定校验纯函数 + 请求配对 + 超时。
 7. **文档同步**:`CLAUDE.md` 续话小节、`converse.js` 注释、本 spec 实现记录;更新 [[headless-session-no-tty]] 记忆(网页续话已能代答交互)。
@@ -151,4 +152,20 @@ L3 **复用本 spec 的全部地基,不返工进程模型**——这正是本 sp
 
 ## 实现记录
 
-（完成后填）
+**先观测（钉死全部不确定点，经 ccr）**：三块拼图 + skip 互斥实测均通过（见「背景」）。关键结论：长驻 stream-json + 权限工具 + ccr 三者共存；skip 模式下 perm 工具根本不被调用 → 实现按 cmdTemplate 是否含 skip 分两条路。
+
+**落地文件**（worktree `feat/web-interactive-perm`，端口 3891）：
+- `src/server/permission.js`（新）：纯函数 `normalizeDecision`（fail-closed 校验）/ `templateSkipsPermissions`（放行派生）/ `buildUserMessage`（stream-json 输入格式）。根因层，可单测。
+- `src/server/perm-server.js`（新）：独立 stdio MCP server，暴露 `approve` 工具；收到调用经回环 HTTP POST 转交主进程并阻塞等回复；异常一律 deny（fail-closed）。零依赖手写 JSON-RPC。
+- `src/server/perm-registry.js`（新）：主进程侧协调器。按 `tool_use_id` 挂起 Promise + ws 广播 `permission_request`；`resolvePermission` 落定；超时（5min）/ 会话回收 → deny。随机 token 校验。
+- `src/server/converse.js`（重写）：`-p` 短命 → 长驻 stream-json 进程注册表 `procs`，持有 stdin，多轮共享上下文，空闲 10min 回收。`buildArgs` 按 cmdTemplate 派生放行：含 skip 不挂 perm 工具；不含 skip 挂 `--mcp-config`（动态生成指向 perm-server）+ `--permission-mode default --permission-prompt-tool mcp__commander__approve`。`running` 保护重定义为「非本进程持有 → 禁注入」。`startSession`（新建会话）仍用 `-p` 拿 sid 入队。保留 `saveUploads`/`extractSessionId`（测试依赖）。
+- `src/server/index.js`：加 `POST /internal/permission`（token 校验，perm-server 长轮询）+ `POST /api/sessions/:sid/permission`（用户回灌）；listen 后 `setInternalUrl`。
+- 前端 `App.jsx` 转发 `permission_request`/`permission_resolved` 给 `emitConverse`；`TaskCard.jsx` 新增 `perms` 状态 + `PermissionCard`（三类：普通工具审批 / `AskUserQuestion` 可选卡片 / `ExitPlanMode` 计划批准）+ `answerPerm` 回灌；`api.js` 加 `api.permission`；`styles.css` 加 `.perm-*`。
+
+**验证**：
+- 单测 `test/permission.test.mjs`（12 条）：决定 fail-closed、cmdTemplate 派生、stream-json 消息构造、配对/超时/会话回收。`pnpm test` 90/90、`pnpm build` 通过。
+- perm-server 独立 JSON-RPC 端到端（假端点）：handshake→tools/call→POST→回传 decision，通过。
+- 活服务端点冒烟（3891）：内部端点拒错 token(403)、回灌缺参(400)、未命中(matched:false)、queue(200)。
+- **待人工浏览器端到端**：需一个 `cmdTemplate` 不含 skip 的会话触发真实工具 → 看审批/澄清卡片 → 点选 → 决定生效。（用户当前模板含 skip，按设计走全放行、不弹卡——这本身也是一条已验证路径。）
+
+**偏差**：放行机制从初稿的「`autoApprove` 独立配置项」改为「派生自 cmdTemplate」（用户反馈：尊重用户已设的参数，模板带 skip 就该全放行）。回灌通道用 HTTP POST 而非 ws 入站（与项目既有动作一致，ws 保持纯广播）。

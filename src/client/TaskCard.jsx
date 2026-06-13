@@ -146,6 +146,82 @@ function ToolGroup({ group }) {
   )
 }
 
+// 权限请求入参的紧凑摘要（普通工具用）
+function permInputSummary(toolName, input) {
+  if (!input || typeof input !== 'object') return ''
+  const f = input.file_path || input.path || input.notebook_path
+  if (f) return String(f).split('/').slice(-2).join('/')
+  if (input.command) return String(input.command).slice(0, 80)
+  if (input.pattern) return String(input.pattern).slice(0, 60)
+  const keys = Object.keys(input)
+  return keys.length ? `${keys.slice(0, 3).join(', ')}` : ''
+}
+
+// 一张权限审批/澄清/计划卡片（spec 015）。answer(decision) 回灌后由父级移除。
+function PermissionCard({ perm, onAnswer }) {
+  const { tool_name: tool, input } = perm
+  const allow = (updatedInput) => onAnswer({ behavior: 'allow', ...(updatedInput ? { updatedInput } : {}) })
+  const deny = (message) => onAnswer({ behavior: 'deny', message: message || '用户拒绝' })
+
+  // L2 澄清：AskUserQuestion → 可选项卡片（答案经 updatedInput.answers 回填）
+  if (tool === 'AskUserQuestion' && Array.isArray(input?.questions)) {
+    return (
+      <div className="perm-card perm-ask">
+        <div className="perm-head">❓ 澄清</div>
+        {input.questions.map((q, qi) => (
+          <div className="perm-q" key={qi}>
+            <div className="perm-q-text">{q.question}</div>
+            <div className="perm-opts">
+              {(q.options || []).map((o, oi) => (
+                <button
+                  key={oi}
+                  className="perm-opt"
+                  onClick={() =>
+                    allow({ ...input, answers: { ...(input.answers || {}), [q.question]: o.label } })
+                  }
+                  title={o.description || ''}
+                >
+                  {o.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+    )
+  }
+
+  // L2 计划：ExitPlanMode → 计划全文 + 批准/打回
+  if (tool === 'ExitPlanMode' && input?.plan) {
+    return (
+      <div className="perm-card perm-plan">
+        <div className="perm-head">📋 计划确认</div>
+        <div className="perm-plan-body">
+          <Markdown text={String(input.plan)} />
+        </div>
+        <div className="perm-actions">
+          <button className="perm-allow" onClick={() => allow()}>批准计划</button>
+          <button className="perm-deny" onClick={() => deny('用户打回计划')}>打回</button>
+        </div>
+      </div>
+    )
+  }
+
+  // L1 普通工具：工具名 + 入参摘要 + 允许/拒绝
+  return (
+    <div className="perm-card perm-tool">
+      <div className="perm-head">
+        🔐 请求使用 <b>{tool || '工具'}</b>
+      </div>
+      <div className="perm-input">{permInputSummary(tool, input)}</div>
+      <div className="perm-actions">
+        <button className="perm-allow" onClick={() => allow()}>允许</button>
+        <button className="perm-deny" onClick={() => deny()}>拒绝</button>
+      </div>
+    </div>
+  )
+}
+
 function ContextView({ sid, liveState, onCtx }) {
   const [viewMode, setViewMode] = useViewMode() // 批阅档位（全局共享）
   const [ctx, setCtx] = useState(null)
@@ -158,6 +234,8 @@ function ContextView({ sid, liveState, onCtx }) {
   const [sending, setSending] = useState(false)
   const [reply, setReply] = useState('') // 流式拼接的回复
   const [sendErr, setSendErr] = useState(null)
+  // 待你审批/作答的权限请求（spec 015）：[{ tool_use_id, tool_name, input }]
+  const [perms, setPerms] = useState([])
 
   const replyRef = useRef('') // 与 reply 同步，done 时读它沉淀历史（避免 setState updater 里嵌套副作用）
   const scrollRef = useRef(null) // 滚动容器
@@ -187,6 +265,7 @@ function ContextView({ sid, liveState, onCtx }) {
     setSendErr(null)
     setSending(false)
     setInput('')
+    setPerms([])
     atBottomRef.current = true
     api
       .context(sid, { limit: 10 })
@@ -219,6 +298,19 @@ function ContextView({ sid, liveState, onCtx }) {
     if (!sid) return
     return onConverse((m) => {
       if (m.sid !== sid) return
+      // 权限审批/澄清/计划请求 → 入待办；落定 → 移除
+      if (m.type === 'permission_request') {
+        setPerms((prev) =>
+          prev.some((p) => p.tool_use_id === m.tool_use_id)
+            ? prev
+            : [...prev, { tool_use_id: m.tool_use_id, tool_name: m.tool_name, input: m.input }]
+        )
+        return
+      }
+      if (m.type === 'permission_resolved') {
+        setPerms((prev) => prev.filter((p) => p.tool_use_id !== m.tool_use_id))
+        return
+      }
       if (m.phase === 'delta') {
         replyRef.current += m.text
         setReply((r) => r + m.text)
@@ -293,6 +385,16 @@ function ContextView({ sid, liveState, onCtx }) {
     api.send(sid, text, imgs).catch((e) => {
       setSending(false)
       setSendErr(e.message === 'HTTP 409' ? '该会话可能正在终端运行，无法网页续话' : '发送失败')
+    })
+  }
+
+  // 回灌一条权限审批/澄清/计划的决定（spec 015）。乐观移除卡片；失败则恢复 + 提示。
+  const answerPerm = (toolUseId, decision) => {
+    const removed = perms.find((p) => p.tool_use_id === toolUseId)
+    setPerms((prev) => prev.filter((p) => p.tool_use_id !== toolUseId))
+    api.permission(sid, toolUseId, decision).catch(() => {
+      if (removed) setPerms((prev) => [...prev, removed])
+      setSendErr('回灌决定失败，请重试')
     })
   }
 
@@ -386,6 +488,15 @@ function ContextView({ sid, liveState, onCtx }) {
           )}
         </div>
       </div>
+
+      {/* 权限审批/澄清/计划卡片（spec 015）：即便会话 running 也显示，这正是「该问你时弹给你」 */}
+      {perms.length > 0 && (
+        <div className="perm-list">
+          {perms.map((p) => (
+            <PermissionCard key={p.tool_use_id} perm={p} onAnswer={(d) => answerPerm(p.tool_use_id, d)} />
+          ))}
+        </div>
+      )}
 
       {/* 续话输入框 */}
       <div className="converse">

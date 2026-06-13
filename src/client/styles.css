@@ -1465,6 +1465,81 @@ code,
   border-radius: 4px;
   pointer-events: none;
 }
+
+/* ── 权限审批 / 澄清 / 计划卡片（spec 015）── */
+.perm-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+}
+.perm-card {
+  border: 1px solid rgba(255, 184, 90, 0.35);
+  background: rgba(255, 184, 90, 0.07);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 13px;
+}
+.perm-head {
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+.perm-input {
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  margin-bottom: 8px;
+  word-break: break-all;
+}
+.perm-actions {
+  display: flex;
+  gap: 8px;
+}
+.perm-allow,
+.perm-deny,
+.perm-opt {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 5px 12px;
+  font-size: 12.5px;
+  cursor: pointer;
+  background: var(--bg);
+  color: var(--fg);
+}
+.perm-allow {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.perm-deny:hover {
+  border-color: var(--p0);
+  color: var(--p0);
+}
+.perm-opt {
+  text-align: left;
+}
+.perm-opt:hover {
+  border-color: var(--accent);
+}
+.perm-opts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+}
+.perm-q {
+  margin-bottom: 8px;
+}
+.perm-q-text {
+  margin-bottom: 4px;
+}
+.perm-plan-body {
+  max-height: 260px;
+  overflow-y: auto;
+  background: var(--bg);
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+}
 .converse-send {
   position: absolute;
   right: 8px;
