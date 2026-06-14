@@ -174,6 +174,24 @@ export function isEmptySession(rec) {
   return rec?.hasRealUserMsg === false
 }
 
+// ── stale running 纠正（纯函数，根因层，可单测）──
+// 常规下 hook 态优先于 scan（LIVE_RANK），scan 不能把 hook 的精确态覆盖回近似态。
+// 但有个空档：`--resume` 一个本已 idle 的旧会话会触发 SessionStart→running(hook)，
+// 之后若没有真实 turn，就永远等不到 Stop/Notification 来收尾，会话永久卡在 running。
+// 关键洞察:scanner 的 classify() 只在 jsonl 静默 >180s 后才返回非 running 的终态——
+// 真正在跑的会话会持续写 jsonl,scan 也必然返回 running。所以「当前是 hook running、
+// 而 scan 报了终态(waiting/idle/completed)」本身就是「这个 hook running 已过期」的铁证,
+// 此时破例允许 scan 纠正它。其余情况一律维持 hook 优先。
+export function scanOverridesStaleRunning(rec, session) {
+  return (
+    rec?.source === 'scan' &&
+    !!rec?.liveState &&
+    rec.liveState !== 'running' && // scan 报了终态 = jsonl 已静默 → 证明没在跑
+    session?.liveState === 'running' &&
+    session?.source === 'hook'
+  )
+}
+
 export function upsertFromAgent(rec) {
   if (!rec || !rec.claudeSessionId) return false
   const now = rec.eventAt || Date.now()
@@ -208,10 +226,15 @@ export function upsertFromAgent(rec) {
     sessStore.sessions.push(session)
     isNew = true
   } else {
-    // hook 数据优先于 scan：scan 不能把 hook 设的精确态覆盖回近似态
+    // hook 数据优先于 scan：scan 不能把 hook 设的精确态覆盖回近似态。
+    // 例外：stale running——scan 可纠正一个永远等不到收尾事件的 hook running（见 scanOverridesStaleRunning）。
     const incomingRank = LIVE_RANK[rec.source || 'scan'] || 1
     const currentRank = LIVE_RANK[session.source || 'scan'] || 1
-    if (incomingRank >= currentRank || rec.source === 'hook') {
+    if (
+      incomingRank >= currentRank ||
+      rec.source === 'hook' ||
+      scanOverridesStaleRunning(rec, session)
+    ) {
       if (rec.liveState) session.liveState = rec.liveState
       session.source = rec.source || session.source
     }

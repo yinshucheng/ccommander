@@ -7,7 +7,7 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { shouldRevive, isEmptySession } from '../src/server/tasks.js'
+import { shouldRevive, isEmptySession, scanOverridesStaleRunning } from '../src/server/tasks.js'
 
 // ── 问题 1：done/dismissed 会话的复活规则 ──
 // 根因：旧逻辑里任何 liveState==='waiting' 都复活，scan 的近似 waiting 也会把
@@ -125,4 +125,65 @@ test('unskip: task 已 done/skipped → 不操作（撤销过期）', () => {
 test('unskip: 不存在的 task → null', () => {
   setupTask()
   assert.equal(unskipTask('nope', { queuedAt: 0, skipCount: 0 }), null)
+})
+
+// ── stale running：--resume 旧会话后卡在 running 的根因 ──
+// 根因：SessionStart→running(hook) 后无后续 turn，等不到 Stop/Notification 收尾，
+// hook running 永久卡死；而 LIVE_RANK 又让 scan 的正确终态压不过它。
+// 修正：scan 报终态(jsonl 已静默 >180s = 证明没在跑)时，破例允许纠正 hook running。
+
+test('回归(stale running): scan 终态(waiting) 可纠正卡死的 hook running', () => {
+  assert.equal(
+    scanOverridesStaleRunning(
+      { source: 'scan', liveState: 'waiting' },
+      { source: 'hook', liveState: 'running' }
+    ),
+    true,
+    'jsonl 静默后 scan 报 waiting，说明 hook running 已过期，应允许纠正'
+  )
+})
+
+test('回归(stale running): scan 的 idle/completed 也能纠正 hook running', () => {
+  assert.equal(
+    scanOverridesStaleRunning({ source: 'scan', liveState: 'idle' }, { source: 'hook', liveState: 'running' }),
+    true
+  )
+  assert.equal(
+    scanOverridesStaleRunning({ source: 'scan', liveState: 'completed' }, { source: 'hook', liveState: 'running' }),
+    true
+  )
+})
+
+test('回归(stale running): scan 报 running 不触发纠正（真在跑，jsonl 仍在写）', () => {
+  assert.equal(
+    scanOverridesStaleRunning(
+      { source: 'scan', liveState: 'running' },
+      { source: 'hook', liveState: 'running' }
+    ),
+    false,
+    'scan 也判 running = jsonl 未静默 = 可能真在跑，不能覆盖'
+  )
+})
+
+test('回归(stale running): 不覆盖 hook 的精确终态(waiting/completed)', () => {
+  // 当前已是 hook 设的精确态，scan 不该插手——LIVE_RANK 仍然生效
+  assert.equal(
+    scanOverridesStaleRunning({ source: 'scan', liveState: 'idle' }, { source: 'hook', liveState: 'waiting' }),
+    false,
+    '只纠正 running，不动 hook 已定的 waiting/completed'
+  )
+})
+
+test('回归(stale running): 当前态来自 scan 时不走此特例（常规 LIVE_RANK 已覆盖）', () => {
+  assert.equal(
+    scanOverridesStaleRunning({ source: 'scan', liveState: 'waiting' }, { source: 'scan', liveState: 'running' }),
+    false,
+    'scan→scan 走常规 incomingRank>=currentRank，无需此特例'
+  )
+})
+
+test('回归(stale running): 缺字段不炸、判 false', () => {
+  assert.equal(scanOverridesStaleRunning(undefined, undefined), false)
+  assert.equal(scanOverridesStaleRunning({}, {}), false)
+  assert.equal(scanOverridesStaleRunning({ source: 'scan' }, { source: 'hook', liveState: 'running' }), false)
 })

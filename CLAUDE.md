@@ -55,7 +55,7 @@ Claude Code hook ──► ~/.commander/events.jsonl ──► events.js（tail 
 
 - **events.js**：消费 hook 写的事件流(精确,waiting/completed ~95%)。默认只读启动后的新行。
 - **scanner.js**：扫 `~/.claude/projects` 的会话 jsonl,靠 mtime 静默阈值(180s)+ 末条事件角色判定 waiting/idle(兜底,~70%,漏报为主)。
-- **`upsertFromAgent`**（`tasks.js`）是两条源的汇合点：会话 upsert → 自动建/更新「隐式 task」→ 入队。**hook 数据优先级高于 scan**(`LIVE_RANK`),scan 不能把 hook 设的精确态覆盖回近似态。
+- **`upsertFromAgent`**（`tasks.js`）是两条源的汇合点：会话 upsert → 自动建/更新「隐式 task」→ 入队。**hook 数据优先级高于 scan**(`LIVE_RANK`),scan 不能把 hook 设的精确态覆盖回近似态。**唯一例外:stale running**——`--resume` 一个本已 idle 的旧会话会触发 `SessionStart→running`(hook),但之后没有真实 turn 就永远等不到 `Stop`/`Notification` 收尾,会话永久卡在 running。因 scanner 只在 jsonl 静默 >180s 后才报终态(真在跑会持续写 jsonl),所以「当前 hook running、而 scan 报了终态」即「hook running 已过期」的铁证,此时破例允许 scan 纠正(`scanOverridesStaleRunning`,纯函数可测)。
 
 ### 任务 ↔ 会话模型（`tasks.js` + `scheduler.js`）
 
