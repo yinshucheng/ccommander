@@ -80,15 +80,19 @@ const ROLE_LABEL = { user: '你', assistant: 'AI', tool: '⚙' }
 // 验证脚本: scripts/test-slash-commands.sh（如需扩列表请先跑它复测）。
 //
 // 关于 Plan 模式：不是斜杠命令路径，需要 spawn 时带 `--permission-mode plan`。
-// commander 走 ccr spawn 路线、目前不支持运行中切（需要 SDK in-process API），
-// 见之前 review 的「选项 A 拿不到模式热切」。
+// 斜杠命令清单（前端补全 + 后端 slashCommand 联动）。
+// kind: 'passthrough' = 透传给 claude（实测 stream-json 模式可用）
+//        'simulated'   = commander 端模拟（重 spawn / 起新 sid，详见 converse.js slashCommand）
+// TTY-only 命令不在这里 —— 前端在 doSend 里靠后端报错兜底（避免维护两份白名单漂移）。
 const SLASH_COMMANDS = [
-  { cmd: '/compact', desc: '压缩当前会话上下文' },
-  { cmd: '/usage', desc: '查看 token / 调用统计' },
-  { cmd: '/insights', desc: '生成会话洞察报告（输出 file:// 链接）' },
-  { cmd: '/code-review', desc: '对当前 diff 跑代码评审' },
-  { cmd: '/review', desc: '对 PR 跑代码评审（需 PR 号或当前 branch 有 PR）' },
-  { cmd: '/security-review', desc: '对当前 diff 跑安全评审（需 git 仓库）' },
+  { cmd: '/compact', desc: '压缩当前会话上下文', kind: 'passthrough' },
+  { cmd: '/usage', desc: '查看 token / 调用统计', kind: 'passthrough' },
+  { cmd: '/insights', desc: '生成会话洞察报告（输出 file:// 链接）', kind: 'passthrough' },
+  { cmd: '/code-review', desc: '对当前 diff 跑代码评审', kind: 'passthrough' },
+  { cmd: '/review', desc: '对 PR 跑代码评审（需 PR 号或当前 branch 有 PR）', kind: 'passthrough' },
+  { cmd: '/security-review', desc: '对当前 diff 跑安全评审（需 git 仓库）', kind: 'passthrough' },
+  { cmd: '/plan', desc: '切到 plan 模式（重启进程加 --permission-mode plan）', kind: 'simulated' },
+  { cmd: '/clear', desc: '清空上下文：杀进程，在同目录新建会话', kind: 'simulated' },
 ]
 
 // 稍后(defer)的快捷档 → 换算成「从现在起多少分钟」。
@@ -544,6 +548,20 @@ function ContextView({ sid, liveState, onCtx }) {
     setInput('')
     setImages([])
     requestAnimationFrame(autosize) // 清空后收回高度
+    // 斜杠命令走专用 API：commander 端模拟（/plan /clear）或透传白名单
+    if (text.startsWith('/')) {
+      api.slash(sid, text, imgs).then((r) => {
+        if (r?.ok === false) {
+          setSending(false)
+          setSendErr(r.error || '斜杠命令失败')
+        }
+        // ok=true：sendMessage 路径会发 phase:done，sending 自然解锁；不动它
+      }).catch((e) => {
+        setSending(false)
+        setSendErr(`斜杠命令失败: ${e.message}`)
+      })
+      return
+    }
     api.send(sid, text, imgs).catch((e) => {
       setSending(false)
       setSendErr(e.message === 'HTTP 409' ? '该会话可能正在终端运行，无法网页续话' : '发送失败')
@@ -809,6 +827,9 @@ function ContextView({ sid, liveState, onCtx }) {
                     }}
                   >
                     <span className="slash-cmd">{c.cmd}</span>
+                    <span className={`slash-kind slash-kind-${c.kind}`} title={c.kind === 'simulated' ? 'commander 端模拟' : '透传给 claude'}>
+                      {c.kind === 'simulated' ? '模拟' : '透传'}
+                    </span>
                     <span className="slash-desc">{c.desc}</span>
                   </div>
                 ))}

@@ -1704,6 +1704,22 @@ code,
   color: var(--muted);
   font-size: 11.5px;
 }
+.slash-kind {
+  font-size: 10px;
+  font-weight: 500;
+  padding: 1px 5px;
+  border-radius: 3px;
+  letter-spacing: 0.3px;
+  flex-shrink: 0;
+}
+.slash-kind-passthrough {
+  background: rgba(90, 169, 255, 0.14);
+  color: #6ea9d6;
+}
+.slash-kind-simulated {
+  background: rgba(220, 170, 80, 0.16);
+  color: #d4a857;
+}
 .slash-hint {
   padding: 3px 10px;
   font-size: 10.5px;

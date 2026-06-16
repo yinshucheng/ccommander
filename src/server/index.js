@@ -35,6 +35,7 @@ import {
   restartSession,
   warmHookServer,
   abortTurn,
+  slashCommand,
 } from './converse.js'
 import { requestPermission, resolvePermission, checkToken, setInternalUrl } from './perm-registry.js'
 
@@ -200,6 +201,15 @@ export function startServer({ port = 3890 } = {}) {
   // A-1：ESC 中断本轮（SIGINT + stdin 注入 reason；详见 converse.js abortTurn 注释）
   app.post('/api/sessions/:sid/abort', (req, res) => {
     const r = abortTurn(req.params.sid)
+    res.status(r.status || 200).json(r)
+  })
+
+  // A-2b：斜杠命令分发（commander 端模拟 /plan /clear；透传 /compact 等；拒收 TTY-only）
+  app.post('/api/sessions/:sid/slash', express.json({ limit: '2mb' }), (req, res) => {
+    const line = String(req.body?.text || '').trim()
+    const imagePaths = Array.isArray(req.body?.imagePaths) ? req.body.imagePaths : []
+    if (!line) return res.status(400).json({ ok: false, error: '消息为空' })
+    const r = slashCommand(req.params.sid, line, imagePaths)
     res.status(r.status || 200).json(r)
   })
 

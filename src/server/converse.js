@@ -191,6 +191,8 @@ function writeMcpConfig(sid) {
 // 如果 hook server 已启动，再叠加 --settings <临时 settings 文件>，让 hook 直接 POST
 // 回我们自己进程（精准到 spawn 的这一个 claude；详见 hook-server.js 注释）。
 // opts.skipHookSettings: 早夭重试时去掉 --settings（怀疑是它把 ccr/claude 噎住）
+// opts.permissionMode: 'plan' 时强制带 --permission-mode plan（即便模板带 skip 也加）
+//   —— 这是斜杠 /plan 的实现路径：commander 端模拟，下一轮以 plan 模式重 spawn。
 function buildArgs(sid, opts = {}) {
   const argv = launcherFromTemplate().split(/\s+/)
   const bin = argv[0]
@@ -215,12 +217,16 @@ function buildArgs(sid, opts = {}) {
     mcpConfigPath = writeMcpConfig(sid)
     args.push(
       '--permission-mode',
-      'default',
+      opts.permissionMode || 'default',
       '--mcp-config',
       mcpConfigPath,
       '--permission-prompt-tool',
       'mcp__commander__approve'
     )
+  } else if (opts.permissionMode === 'plan') {
+    // 模板带 skip 但用户走了 /plan：强行加 --permission-mode plan
+    // （plan 模式本身不弹审批，靠 ExitPlanMode 在结束时收口，与 skip 不冲突）
+    args.push('--permission-mode', 'plan')
   }
   let hookSettingsPath = null
   // ccr 不支持 --settings（会和 ccr 自己的 settings 路径冲突）；直接跳过，
@@ -337,9 +343,12 @@ function ensureProc(initialSid, cwd) {
   const earlyCount = sessForRetry?.earlyDeathCount || 0
   const skipHookSettings = earlyCount >= 1
   const skipPartial = earlyCount >= 2
+  // 用户走过 /plan → session.permissionMode='plan'，下一次 spawn 带 --permission-mode plan
+  const permissionMode = sessForRetry?.permissionMode || undefined
   const { bin, args, mcpConfigPath, hookSettingsPath } = buildArgs(initialSid, {
     skipHookSettings,
     skipPartial,
+    permissionMode,
   })
   clearStdinNonBlock()
   // stdio: 多开一个 fd 3 给 launcher 上报 thinking 状态（第 4 项；未用 launcher 时该 fd 空闲）
@@ -715,6 +724,88 @@ export function abortTurn(claudeSessionId) {
   broadcast({ type: 'thinking', sid, thinking: false })
   broadcast({ type: 'turn-aborted', sid, escalated })
   return { ok: true, status: 200, escalated }
+}
+
+// 斜杠命令分发：commander 端模拟 vs 透传 vs 拒收。详见 task #11 注释。
+//
+// 实测在 stream-json --output-format 模式下 claude CLI 的斜杠命令绝大多数会回
+// "isn't available"（TTY-only）。我们维护两份白名单：
+//   PASSTHROUGH —— 实测可透传，sendMessage 即可
+//   SIMULATED   —— commander 端代为实现（重 spawn / 起新 sid）
+// 其余 /xxx 在前端就被挡下，根本不进这里；保险起见后端也再判一次。
+export const PASSTHROUGH_SLASH = new Set([
+  '/compact', '/usage', '/insights', '/code-review', '/review', '/security-review',
+])
+export const SIMULATED_SLASH = new Set(['/plan', '/clear'])
+
+export function slashCommand(claudeSessionId, line, imagePaths = []) {
+  const raw = String(line || '').trim()
+  if (!raw.startsWith('/')) return { ok: false, status: 400, error: '不是斜杠命令' }
+  // 切分 "/cmd args..."
+  const sp = raw.indexOf(' ')
+  const cmd = (sp >= 0 ? raw.slice(0, sp) : raw).toLowerCase()
+  const rest = sp >= 0 ? raw.slice(sp + 1).trim() : ''
+
+  const { sessions } = getSessions()
+  const session = sessions.find(
+    (s) =>
+      s.claudeSessionId === claudeSessionId ||
+      s.sessionId === claudeSessionId ||
+      (s.aliases || []).includes(claudeSessionId)
+  )
+  if (!session) return { ok: false, status: 404, error: '找不到该会话' }
+  const sid = session.claudeSessionId
+
+  if (PASSTHROUGH_SLASH.has(cmd)) {
+    // 直接走 sendMessage（保留 args 一起发给 claude）
+    return sendMessage(sid, raw, imagePaths)
+  }
+
+  if (cmd === '/plan') {
+    // 标记 session 进入 plan 模式 → 杀长驻进程 → 下次 sendMessage 时 ensureProc
+    // 重 spawn 带 --permission-mode plan。需要提示文字让 claude 知道用户意图。
+    session.permissionMode = 'plan'
+    persist('sessions')
+    const rec = procs.get(sid) || procs.get((session.aliases || []).find((a) => procs.has(a)) || '')
+    if (rec) killProc(rec.currentSid, 'plan-mode-switch')
+    const followup = rest
+      ? `[已切到 plan 模式，下面这条按 plan 模式回答]\n${rest}`
+      : '[已切到 plan 模式。请用 ExitPlanMode 工具提交计划，等用户批准再执行。]'
+    broadcast({ type: 'converse', sid, phase: 'delta', text: '\n[commander] 已切到 plan 模式，下一轮起生效。\n' })
+    return sendMessage(sid, followup, imagePaths)
+  }
+
+  if (cmd === '/clear') {
+    // 不在 claude 进程内 reset 上下文（透传 /clear 效果不明）—— 改为：杀掉长驻进程，
+    // 在同 workingDir 起新 sid。会话面板上会看到新 task；老 session 保留可回溯。
+    const cwd = session.workingDir || session.projectRoot
+    if (!cwd) return { ok: false, status: 400, error: '当前会话没有工作目录，无法 /clear' }
+    const rec = procs.get(sid) || procs.get((session.aliases || []).find((a) => procs.has(a)) || '')
+    if (rec) killProc(rec.currentSid, 'clear-new-session')
+    const seed = rest || '[新会话]'
+    broadcast({ type: 'converse', sid, phase: 'delta', text: '\n[commander] 已清空上下文：将在同目录起一个新会话。\n' })
+    const r = startSession({ workingDir: cwd, text: seed })
+    return { ok: r.ok !== false, status: r.status || 200, cleared: true, newSession: r }
+  }
+
+  // 未知 / 已知 TTY-only：拒收，告诉用户去原生终端
+  const TTY_ONLY = new Set([
+    '/model', '/help', '/resume', '/init', '/memory', '/agents', '/mcp',
+    '/diff', '/doctor', '/permissions', '/effort', '/debug', '/simplify',
+    '/loop', '/context',
+  ])
+  if (TTY_ONLY.has(cmd)) {
+    return {
+      ok: false,
+      status: 400,
+      error: `${cmd} 只在原生终端可用，网页面板不支持。`,
+    }
+  }
+  return {
+    ok: false,
+    status: 400,
+    error: `未知斜杠命令 ${cmd}。网页支持：${[...PASSTHROUGH_SLASH, ...SIMULATED_SLASH].join(' ')}`,
+  }
 }
 
 // 正在启动中的「网页新建会话」：workingDir -> child（开始时还没有 sessionId）
