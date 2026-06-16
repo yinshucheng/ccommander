@@ -70,6 +70,27 @@ const LIVE = {
 
 const ROLE_LABEL = { user: '你', assistant: 'AI', tool: '⚙' }
 
+// A-2：commander 走 stream-json（非 TTY）路径，**很多斜杠命令 claude 会直接拒绝**
+// （返回 "/xxx isn't available in this environment."）。这是 claude CLI 的硬约束 ——
+// 需要交互界面/picker/mode 切换的命令（/plan /model /clear /help /resume /agents
+// /permissions /context /memory 等）在 stream-json 模式下都不工作。
+//
+// 这份列表是 2026-06 用 `echo /xxx | claude -p --output-format stream-json --verbose`
+// 逐个实测筛出来的「在 commander 里真的能跑」的子集，不在此列的命令不要加。
+// 验证脚本: scripts/test-slash-commands.sh（如需扩列表请先跑它复测）。
+//
+// 关于 Plan 模式：不是斜杠命令路径，需要 spawn 时带 `--permission-mode plan`。
+// commander 走 ccr spawn 路线、目前不支持运行中切（需要 SDK in-process API），
+// 见之前 review 的「选项 A 拿不到模式热切」。
+const SLASH_COMMANDS = [
+  { cmd: '/compact', desc: '压缩当前会话上下文' },
+  { cmd: '/usage', desc: '查看 token / 调用统计' },
+  { cmd: '/insights', desc: '生成会话洞察报告（输出 file:// 链接）' },
+  { cmd: '/code-review', desc: '对当前 diff 跑代码评审' },
+  { cmd: '/review', desc: '对 PR 跑代码评审（需 PR 号或当前 branch 有 PR）' },
+  { cmd: '/security-review', desc: '对当前 diff 跑安全评审（需 git 仓库）' },
+]
+
 // 稍后(defer)的快捷档 → 换算成「从现在起多少分钟」。
 // 今晚=今天 20:00（若已过则明天 20:00）；明早=次日 09:00。
 // 一键默认档(deferDefault,来自配置)若不在固定档里则单列一档,且排首位。
@@ -207,17 +228,97 @@ function PermissionCard({ perm, onAnswer }) {
     )
   }
 
-  // L1 普通工具：工具名 + 入参摘要 + 允许/拒绝
+  // L1 普通工具：工具名 + 入参摘要 + 允许/拒绝。
+  // A-3：可展开"改入参再批"（happy 同款 updatedInput）或"拒绝带说明"。
+  return <ToolPermissionCard tool={tool} input={input} allow={allow} deny={deny} />
+}
+
+// A-3：可展开的工具权限卡。三档操作：
+//   ① 一键允许（最常用）
+//   ② 改入参后允许（happy 的 updatedInput；适合"路径写错了，帮我改一下再跑"）
+//   ③ 拒绝并附说明（让 AI 知道为什么不让做）
+function ToolPermissionCard({ tool, input, allow, deny }) {
+  const [editing, setEditing] = useState(false)
+  const [denying, setDenying] = useState(false)
+  const [editJson, setEditJson] = useState('')
+  const [editErr, setEditErr] = useState('')
+  const [reason, setReason] = useState('')
+
+  const openEditor = () => {
+    setEditJson(JSON.stringify(input || {}, null, 2))
+    setEditErr('')
+    setEditing(true)
+    setDenying(false)
+  }
+  const submitEdit = () => {
+    let parsed
+    try {
+      parsed = JSON.parse(editJson)
+    } catch (e) {
+      setEditErr(`JSON 解析失败：${e.message}`)
+      return
+    }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      setEditErr('入参必须是 JSON 对象')
+      return
+    }
+    allow(parsed)
+  }
+
   return (
     <div className="perm-card perm-tool">
       <div className="perm-head">
         🔐 请求使用 <b>{tool || '工具'}</b>
       </div>
       <div className="perm-input">{permInputSummary(tool, input)}</div>
-      <div className="perm-actions">
-        <button className="perm-allow" onClick={() => allow()}>允许</button>
-        <button className="perm-deny" onClick={() => deny()}>拒绝</button>
-      </div>
+
+      {/* 主操作行 */}
+      {!editing && !denying && (
+        <div className="perm-actions">
+          <button className="perm-allow" onClick={() => allow()}>允许</button>
+          <button className="perm-edit" onClick={openEditor} title="修改入参后允许（如改文件路径）">
+            ✎ 改入参
+          </button>
+          <button className="perm-deny" onClick={() => setDenying(true)}>拒绝并说明</button>
+        </div>
+      )}
+
+      {/* 改入参 */}
+      {editing && (
+        <div className="perm-edit-box">
+          <div className="perm-edit-head">编辑入参（JSON）：</div>
+          <textarea
+            className="perm-edit-input"
+            value={editJson}
+            onChange={(e) => setEditJson(e.target.value)}
+            spellCheck={false}
+            rows={Math.min(12, Math.max(4, editJson.split('\n').length))}
+          />
+          {editErr && <div className="perm-edit-err">{editErr}</div>}
+          <div className="perm-actions">
+            <button className="perm-allow" onClick={submitEdit}>用此入参允许</button>
+            <button className="perm-deny" onClick={() => setEditing(false)}>取消</button>
+          </div>
+        </div>
+      )}
+
+      {/* 拒绝并说明 */}
+      {denying && (
+        <div className="perm-edit-box">
+          <div className="perm-edit-head">告诉 AI 为什么不让做（可空，留空则默认"用户拒绝"）：</div>
+          <textarea
+            className="perm-edit-input"
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            placeholder="比如：这个文件不能动 / 路径不对 / 先做另一件事"
+            rows={3}
+          />
+          <div className="perm-actions">
+            <button className="perm-deny" onClick={() => deny(reason.trim())}>提交拒绝</button>
+            <button className="perm-allow" onClick={() => setDenying(false)}>取消</button>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -236,6 +337,18 @@ function ContextView({ sid, liveState, onCtx }) {
   const [sendErr, setSendErr] = useState(null)
   // 待你审批/作答的权限请求（spec 015）：[{ tool_use_id, tool_name, input }]
   const [perms, setPerms] = useState([])
+  // 第 4 项：thinking 实时态（fd3 fetch 心跳或 stream-json 流入）
+  const [thinking, setThinking] = useState(false)
+  // 第 5 项：长驻进程死了 → 显示重启横幅（diedReason 是字符串；stderrTail/hint 来自重启失败响应）
+  const [diedReason, setDiedReason] = useState(null)
+  const [diedStderr, setDiedStderr] = useState('')
+  const [restartHint, setRestartHint] = useState('')
+  // 第 3 项：sid 因 /compact/fork 变更，给个非阻塞的提示
+  const [migratedTo, setMigratedTo] = useState(null)
+  const [restarting, setRestarting] = useState(false)
+  // A-2：斜杠下拉（input 开头 "/" 时显示候选）
+  const [slashOpen, setSlashOpen] = useState(false)
+  const [slashIdx, setSlashIdx] = useState(0)
 
   const replyRef = useRef('') // 与 reply 同步，done 时读它沉淀历史（避免 setState updater 里嵌套副作用）
   const scrollRef = useRef(null) // 滚动容器
@@ -266,6 +379,12 @@ function ContextView({ sid, liveState, onCtx }) {
     setSending(false)
     setInput('')
     setPerms([])
+    setThinking(false)
+    setDiedReason(null)
+    setDiedStderr('')
+    setRestartHint('')
+    setMigratedTo(null)
+    setRestarting(false)
     atBottomRef.current = true
     api
       .context(sid, { limit: 10 })
@@ -298,6 +417,49 @@ function ContextView({ sid, liveState, onCtx }) {
     if (!sid) return
     return onConverse((m) => {
       if (m.sid !== sid) return
+      // 第 4 项：thinking
+      if (m.type === 'thinking') {
+        setThinking(!!m.thinking)
+        return
+      }
+      // A-1：本轮被中断 —— 立刻收尾，回复区追加一条灰色「用户中断」标记
+      if (m.type === 'turn-aborted') {
+        if (sending) {
+          // 把流式 reply 落盘成一条历史（防止丢字），再追加中断标记
+          setMsgs((prev) => {
+            const folded = foldReplyIntoHistory(prev, replyRef.current, Date.now())
+            return [
+              ...folded,
+              { seq: -1, role: 'tool', text: m.escalated ? '[用户强制中断（SIGTERM）]' : '[用户中断本轮]', ts: Date.now() },
+            ]
+          })
+          replyRef.current = ''
+          setReply('')
+          setSending(false)
+        }
+        setThinking(false)
+        return
+      }
+      // 第 5 项：会话进程死了 —— 弹横幅，提供重启按钮
+      if (m.type === 'session-died') {
+        setDiedReason(m.reason || 'closed')
+        setDiedStderr(m.stderrTail || '')
+        setThinking(false)
+        return
+      }
+      if (m.type === 'session-restarted') {
+        setDiedReason(null)
+        setDiedStderr('')
+        setRestartHint('')
+        setRestarting(false)
+        return
+      }
+      // 第 3 项：sid 因 /compact/fork 变了 —— 提示一下；下次切会话时面板会重载到新 sid
+      if (m.type === 'session-migrated' || m.type === 'session_aliased') {
+        const newSid = m.newSid || m.sid
+        if (newSid && newSid !== sid) setMigratedTo(newSid)
+        return
+      }
       // 权限审批/澄清/计划请求 → 入待办；落定 → 移除
       if (m.type === 'permission_request') {
         setPerms((prev) =>
@@ -413,10 +575,73 @@ function ContextView({ sid, liveState, onCtx }) {
 
   const removeImage = (i) => setImages((prev) => prev.filter((_, j) => j !== i))
 
+  // A-2：根据当前 input 算斜杠候选
+  const slashCandidates = (() => {
+    const t = input
+    if (!t.startsWith('/') || /\s/.test(t)) return []
+    const lower = t.toLowerCase()
+    return SLASH_COMMANDS.filter((c) => c.cmd.toLowerCase().startsWith(lower))
+  })()
+
+  // input 改变时同步 slashOpen / 复位选中
+  useEffect(() => {
+    const open = slashCandidates.length > 0
+    setSlashOpen(open)
+    if (open) setSlashIdx((i) => Math.min(i, slashCandidates.length - 1))
+  }, [input])
+
+  const pickSlash = (i) => {
+    const c = slashCandidates[i]
+    if (!c) return
+    // 命令后留一个空格，方便接参数（/model opus）；无参数的命令用户直接 Enter 发即可
+    setInput(c.cmd + ' ')
+    setSlashOpen(false)
+    requestAnimationFrame(() => taRef.current?.focus())
+  }
+
+  // A-1：ESC = 中断本轮（仅在 sending 或 thinking 时生效；否则让 ESC 走默认行为）
+  const doAbort = () => {
+    if (!sid) return
+    api
+      .abort(sid)
+      .then((r) => {
+        if (r?.escalated) setSendErr('已升级为 SIGTERM 强制中断；如仍无响应可重启会话')
+      })
+      .catch((e) => setSendErr(`中断失败: ${e.message}`))
+  }
+
   const onKeyDown = (e) => {
+    // A-2：斜杠下拉打开时优先消费方向/Enter/Esc
+    if (slashOpen && slashCandidates.length > 0) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault()
+        setSlashIdx((i) => (i + 1) % slashCandidates.length)
+        return
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault()
+        setSlashIdx((i) => (i - 1 + slashCandidates.length) % slashCandidates.length)
+        return
+      }
+      if (e.key === 'Tab' || (e.key === 'Enter' && !e.metaKey && !e.ctrlKey)) {
+        e.preventDefault()
+        pickSlash(slashIdx)
+        return
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        setSlashOpen(false)
+        return
+      }
+    }
     if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
       e.preventDefault()
       doSend()
+      return
+    }
+    if (e.key === 'Escape' && (sending || thinking)) {
+      e.preventDefault()
+      doAbort()
     }
   }
 
@@ -429,6 +654,7 @@ function ContextView({ sid, liveState, onCtx }) {
         <div className="ctx-recent-head">
           <span>
             历史 {msgs.length} / 共 {ctx.total} 条
+            {thinking && <span className="thinking-pill" title="检测到正在调用模型/工具">● 正在思考</span>}
           </span>
           <div className="view-seg" role="tablist" aria-label="批阅视图">
             {VIEW_MODES.map((m) => (
@@ -489,6 +715,55 @@ function ContextView({ sid, liveState, onCtx }) {
         </div>
       </div>
 
+      {/* 第 5 项：长驻进程死了，弹一条非阻塞横幅 + 重启按钮 */}
+      {diedReason && (
+        <div className="conv-banner died">
+          <div className="died-main">
+            <div>
+              <span>⚠ 会话进程已退出（{diedReason}）。可重启续话，原 transcript 不丢。</span>
+              {restartHint && <div className="died-hint">{restartHint}</div>}
+            </div>
+            <button
+              className="conv-restart"
+              disabled={restarting}
+              onClick={() => {
+                setRestarting(true)
+                setRestartHint('')
+                api
+                  .restart(sid)
+                  .then((r) => {
+                    setRestarting(false)
+                    if (r && r.ok) return // ws session-restarted 会清横幅
+                    // 重启失败：保留横幅，把 stderr 和退避提示展示给用户
+                    if (r?.stderrTail) setDiedStderr(r.stderrTail)
+                    if (r?.hint) setRestartHint(r.hint)
+                    setDiedReason(r?.error || 'restart failed')
+                  })
+                  .catch((e) => {
+                    setRestarting(false)
+                    setRestartHint(`重启请求失败: ${e.message}`)
+                  })
+              }}
+            >
+              {restarting ? '重启中…' : '🔁 重启会话'}
+            </button>
+          </div>
+          {diedStderr && (
+            <pre className="died-stderr" title="子进程 stderr 末尾">
+              {diedStderr}
+            </pre>
+          )}
+        </div>
+      )}
+
+      {/* 第 3 项：sid 因 /compact/fork 迁移，给个一次性提示（不打断操作） */}
+      {migratedTo && !diedReason && (
+        <div className="conv-banner migrated">
+          <span>ℹ 会话已迁移到新 sid（{migratedTo.slice(0, 8)}…）—— /compact 或 fork 后续仍走同一进程。</span>
+          <button className="conv-restart" onClick={() => setMigratedTo(null)}>知道了</button>
+        </div>
+      )}
+
       {/* 权限审批/澄清/计划卡片（spec 015）：即便会话 running 也显示，这正是「该问你时弹给你」 */}
       {perms.length > 0 && (
         <div className="perm-list">
@@ -518,10 +793,32 @@ function ContextView({ sid, liveState, onCtx }) {
                 ))}
               </div>
             )}
+            {/* A-2：斜杠候选下拉 —— input 开头 "/" 时弹 */}
+            {slashOpen && slashCandidates.length > 0 && (
+              <div className="slash-menu" role="listbox">
+                {slashCandidates.map((c, i) => (
+                  <div
+                    key={c.cmd}
+                    role="option"
+                    aria-selected={i === slashIdx}
+                    className={`slash-item${i === slashIdx ? ' active' : ''}`}
+                    onMouseEnter={() => setSlashIdx(i)}
+                    onMouseDown={(e) => {
+                      e.preventDefault() // 防止 textarea 失焦
+                      pickSlash(i)
+                    }}
+                  >
+                    <span className="slash-cmd">{c.cmd}</span>
+                    <span className="slash-desc">{c.desc}</span>
+                  </div>
+                ))}
+                <div className="slash-hint">↑↓ 选择 · Tab/Enter 填充 · Esc 关闭</div>
+              </div>
+            )}
             <textarea
               ref={taRef}
               className="converse-input"
-              placeholder="直接回复这个会话…（可粘贴图片 · ⌘/Ctrl + Enter 发送）"
+              placeholder="直接回复这个会话…（输入 / 看命令 · ⌘/Ctrl + Enter 发送）"
               value={input}
               disabled={sending}
               onChange={(e) => {
@@ -532,14 +829,26 @@ function ContextView({ sid, liveState, onCtx }) {
               onKeyDown={onKeyDown}
             />
             {sendErr && <span className="converse-err">{sendErr}</span>}
-            <button
-              className="converse-send"
-              onClick={doSend}
-              disabled={(!input.trim() && !images.length) || sending}
-              title="发送 ⌘/Ctrl + Enter"
-            >
-              {sending ? '发送中…' : '发送 ⌘↵'}
-            </button>
+            {/* A-1：发送中/思考中 → 按钮换成"中断 ESC"，否则正常发送。
+                单独按钮而不只靠键盘，是因为粘贴图片场景焦点不一定在 textarea */}
+            {sending || thinking ? (
+              <button
+                className="converse-send abort"
+                onClick={doAbort}
+                title="中断本轮（ESC）"
+              >
+                ⏹ 中断 ESC
+              </button>
+            ) : (
+              <button
+                className="converse-send"
+                onClick={doSend}
+                disabled={!input.trim() && !images.length}
+                title="发送 ⌘/Ctrl + Enter"
+              >
+                发送 ⌘↵
+              </button>
+            )}
           </div>
         )}
       </div>
@@ -695,7 +1004,12 @@ function MetaColumn({ task, session, ctx, live, onAct, api, deferDefault = 30, a
         <button
           className="act skip"
           title="现在不处理，降权重排到同档末尾。仍在队列里，稍后会再轮到"
-          onClick={() => onAct(() => api.skip(task.id), { kind: 'skip', title: tt })}
+          onClick={() =>
+            onAct(
+              () => api.skip(task.id).then((r) => ({ undo: () => api.unskip(task.id, r?._prev) })),
+              { kind: 'skip', title: tt }
+            )
+          }
         >
           → 跳过 <kbd>S</kbd>
         </button>

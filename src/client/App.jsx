@@ -66,6 +66,18 @@ export default function App() {
         // 权限审批/澄清/计划请求与落定：复用 converse 的 pub/sub（带 sid，TaskCard 自行过滤）
         else if (msg.type === 'permission_request' || msg.type === 'permission_resolved')
           emitConverse(msg)
+        // 第 3/4/5 项：thinking / sid 迁移（compact/fork）/ 进程死亡 / 重启
+        // A-1：turn-aborted (ESC 中断本轮)
+        else if (
+          msg.type === 'thinking' ||
+          msg.type === 'session-died' ||
+          msg.type === 'session-migrated' ||
+          msg.type === 'session-restarted' ||
+          msg.type === 'session_aliased' ||
+          msg.type === 'turn-aborted'
+        ) {
+          emitConverse(msg)
+        }
       }
     }
     connect()
@@ -95,11 +107,24 @@ export default function App() {
 
   const act = useCallback(
     async (fn, meta) => {
-      await fn()
+      // fn 可返回 { mergeMeta } 让动作执行后追加额外字段到 toast meta —— 主要给
+      // skip 用：skip 需要把响应里的 _prev 包成 undo 回调挂到 toast 上。撤销窗口 4s。
+      const extra = (await fn()) || {}
+      // MANIFESTO §五「一道朱批，下一份自动呈上」/ PRODUCT「下一条流畅呈上」：
+      // 批阅视图里的批阅动作（done/skip/defer/dismiss）一旦发出，就意味着用户对
+      // 当前这条的专注结束 —— 立刻解除钉住，让 resolveCurrent 回落到 queue.current
+      // = 经过 rerank 后的真·队列头部 = 下一条。
+      //
+      // 注：done/defer/dismiss 让 task 离开活跃队列，原本就会被下方 useEffect 自动清；
+      // 但 skip 让 task 留在队列（只是重排到同档末尾），useEffect 不会触发 —— 那条专门
+      // bug。统一在动作完成时主动清掉，避免再写一条规则。
+      if (meta && ['done', 'skip', 'defer', 'dismiss'].includes(meta.kind)) {
+        setSelectedId(null)
+      }
       refresh()
       if (meta) {
         clearTimeout(toastTimer.current)
-        setToast({ ...meta, leaving: false })
+        setToast({ ...meta, ...extra, leaving: false })
         toastTimer.current = setTimeout(dismissToast, 4000) // 撤销窗口 4s
       }
     },
@@ -128,7 +153,14 @@ export default function App() {
       // 批阅快捷键仅在「批阅」视图生效（面板视图用行内按钮操作）
       if (view !== 'review' || !current) return
       if (k === 'enter') act(() => api.done(current.id), { kind: 'done', title: t })
-      else if (k === 's') act(() => api.skip(current.id), { kind: 'skip', title: t })
+      else if (k === 's') {
+        // skip 返回响应里带 _prev 快照 → 包成 undo 回调挂到 toast 上，4s 内点撤销可回滚。
+        const id = current.id
+        act(
+          () => api.skip(id).then((r) => ({ undo: () => api.unskip(id, r?._prev) })),
+          { kind: 'skip', title: t }
+        )
+      }
       else if (k === 'l') act(() => api.defer(current.id, deferDefault), { kind: 'defer', title: t })
       else if (k === 'd') act(() => api.dismiss(current.id), { kind: 'dismiss', title: t })
     }

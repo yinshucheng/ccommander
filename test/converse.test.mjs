@@ -72,3 +72,19 @@ test('extractSessionId 对不带 id 的增量/空输入返回 null', () => {
   assert.equal(extractSessionId(null), null)
   assert.equal(extractSessionId('garbage'), null)
 })
+
+// templateUsesCcr：决定是否注入 --settings（ccr 会和它自己的 settings 路径冲突）
+import { templateUsesCcr } from '../src/server/converse.js'
+
+test('templateUsesCcr: ccr 开头 → true', () => {
+  assert.equal(templateUsesCcr('ccr code --dangerously-skip-permissions --resume {sessionId}'), true)
+  assert.equal(templateUsesCcr('ccr'), true)
+})
+
+test('templateUsesCcr: 非 ccr → false', () => {
+  assert.equal(templateUsesCcr('claude --dangerously-skip-permissions --resume {sessionId}'), false)
+  assert.equal(templateUsesCcr('node /path/launcher.cjs /path/claude'), false)
+  assert.equal(templateUsesCcr(''), false)
+  assert.equal(templateUsesCcr('  '), false)
+})
+

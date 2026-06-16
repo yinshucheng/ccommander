@@ -78,7 +78,12 @@ function BoardRow({ t, api, onAct, onReview, deferDefault, deferred }) {
             <button
               className="q-act"
               title="跳过 (S)"
-              onClick={() => onAct(() => api.skip(t.id), { kind: 'skip', ...meta })}
+              onClick={() =>
+                onAct(
+                  () => api.skip(t.id).then((r) => ({ undo: () => api.unskip(t.id, r?._prev) })),
+                  { kind: 'skip', ...meta }
+                )
+              }
             >
               →
             </button>

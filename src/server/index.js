@@ -17,6 +17,7 @@ import {
   patchTask,
   doneTask,
   skipTask,
+  unskipTask,
   deferTask,
   undeferTask,
   dismissTask,
@@ -27,7 +28,14 @@ import { startScanner, countClaudeProcesses } from './scanner.js'
 import { getConfig, patchConfig } from './config.js'
 import { getSessionContext } from './transcript.js'
 import { analyzeSession } from './analyze.js'
-import { sendMessage, saveUploads, startSession } from './converse.js'
+import {
+  sendMessage,
+  saveUploads,
+  startSession,
+  restartSession,
+  warmHookServer,
+  abortTurn,
+} from './converse.js'
 import { requestPermission, resolvePermission, checkToken, setInternalUrl } from './perm-registry.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -114,6 +122,12 @@ export function startServer({ port = 3890 } = {}) {
     if (!t) return res.status(404).json({ error: 'not found' })
     res.json(t)
   })
+  // 撤销 skip：req.body.prev 是上一次 /skip 响应里带的 _prev 快照。
+  app.post('/api/tasks/:id/unskip', (req, res) => {
+    const t = unskipTask(req.params.id, req.body?.prev)
+    if (!t) return res.status(404).json({ error: 'not found or already finalized' })
+    res.json(t)
+  })
   app.post('/api/tasks/:id/defer', (req, res) => {
     const t = deferTask(req.params.id, req.body?.minutes ?? 60)
     if (!t) return res.status(404).json({ error: 'not found' })
@@ -175,6 +189,18 @@ export function startServer({ port = 3890 } = {}) {
       tool_use_id: req.body?.tool_use_id || '',
     })
     res.json({ decision })
+  })
+
+  // 第 5 项：会话进程死了后，前端点「重启」走这里 —— 用当前 sid 重新 spawn 长驻进程
+  app.post('/api/sessions/:sid/restart', async (req, res) => {
+    const r = await restartSession(req.params.sid)
+    res.status(r.status || 200).json(r)
+  })
+
+  // A-1：ESC 中断本轮（SIGINT + stdin 注入 reason；详见 converse.js abortTurn 注释）
+  app.post('/api/sessions/:sid/abort', (req, res) => {
+    const r = abortTurn(req.params.sid)
+    res.status(r.status || 200).json(r)
   })
 
   // 公开端点：用户在网页点「允许/拒绝」→ 回灌决定，resolve 对应挂起请求。
@@ -257,6 +283,8 @@ export function startServer({ port = 3890 } = {}) {
   server.listen(port, () => {
     // 权限审批内部端点（perm-server 子进程回连用）：绑本机回环 + 端口
     setInternalUrl(`http://127.0.0.1:${port}/internal/permission`)
+    // 第 2 项：进程级 hook server 现在点火（lazy；不在模块顶层启动，否则测试不退出）
+    warmHookServer()
     console.log(`\n  ⚡ Commander 运行在 http://localhost:${port}`)
     console.log(`     hook 事件 → ~/.commander/events.jsonl  |  扫描兜底已启动\n`)
     const report = buildHealthReport({

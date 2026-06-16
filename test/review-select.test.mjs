@@ -45,3 +45,17 @@ test('空队列不崩：current 为 null', () => {
   assert.equal(resolveCurrent({ current: null, waiting: [], deferred: [] }, 'x'), null)
   assert.equal(selectedExists({ current: null, waiting: [], deferred: [] }, 'x'), false)
 })
+
+// ── 行为规约钉死（MANIFESTO「下一份自动呈上」/ spec 009「跳过」语义）──
+// 在批阅视图里执行 done/skip/defer/dismiss 后，App.jsx 的 act() 主动清掉 selectedId。
+// 清掉后传 null 给 resolveCurrent，必然回落到 queue.current（rerank 后的真头部）。
+// 这条测试钉住「清掉就一定下一条」这层契约，App.jsx 的 act() 那段 if 不能被悄悄删。
+test('钉住清掉后 → resolveCurrent 一定回落到 rerank 后的新 current', () => {
+  // 场景：钉住 'cur'，skip 后假设调度器把 'w1' 排到队头
+  const before = { current: { id: 'cur' }, waiting: [{ id: 'w1' }], deferred: [] }
+  const after = { current: { id: 'w1' }, waiting: [{ id: 'cur' }], deferred: [] }
+  // 钉住状态下：act 之前看到的是钉住的 cur
+  assert.equal(resolveCurrent(before, 'cur').id, 'cur')
+  // act 后 App.jsx 主动 setSelectedId(null)；新 queue 进来后回落到队头
+  assert.equal(resolveCurrent(after, null).id, 'w1')
+})

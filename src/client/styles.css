@@ -1383,6 +1383,87 @@ code,
   border-radius: 8px;
   padding: 10px 12px;
 }
+
+/* 第 3/5 项：会话状态横幅 — 进程死了 / sid 迁移 */
+.conv-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12.5px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  margin-bottom: 8px;
+}
+.conv-banner.died {
+  flex-direction: column;
+  align-items: stretch;
+  color: #b34a3b;
+  background: rgba(220, 100, 80, 0.08);
+  border: 1px solid rgba(220, 100, 80, 0.25);
+}
+.died-main {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.died-hint {
+  font-size: 11.5px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+.died-stderr {
+  margin: 8px 0 0;
+  padding: 6px 8px;
+  font-size: 11px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: #d4837a;
+  background: rgba(0, 0, 0, 0.18);
+  border: 1px solid rgba(220, 100, 80, 0.18);
+  border-radius: 6px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 160px;
+  overflow: auto;
+}
+.conv-banner.migrated {
+  color: var(--muted);
+  background: rgba(90, 169, 255, 0.06);
+  border: 1px solid rgba(90, 169, 255, 0.18);
+}
+.conv-restart {
+  font-size: 12px;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: inherit;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.conv-restart:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.04);
+}
+.conv-restart:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+/* 第 4 项：thinking 指示 */
+.thinking-pill {
+  margin-left: 8px;
+  font-size: 11px;
+  color: #6db96d;
+  background: rgba(109, 185, 109, 0.1);
+  border: 1px solid rgba(109, 185, 109, 0.25);
+  border-radius: 999px;
+  padding: 1px 8px;
+  animation: thinking-blink 1.4s ease-in-out infinite;
+}
+@keyframes thinking-blink {
+  0%, 100% { opacity: 0.7; }
+  50% { opacity: 1; }
+}
 /* 整个 box 充当「输入框」外观：边框/背景在此，内部纵向排 缩略图 → textarea → 发送按钮 */
 .converse-box {
   position: relative;
@@ -1497,7 +1578,8 @@ code,
 }
 .perm-allow,
 .perm-deny,
-.perm-opt {
+.perm-opt,
+.perm-edit {
   border: 1px solid var(--border);
   border-radius: 6px;
   padding: 5px 12px;
@@ -1505,6 +1587,40 @@ code,
   cursor: pointer;
   background: var(--bg);
   color: var(--fg);
+}
+/* A-3：改入参 / 拒绝并说明 的编辑区 */
+.perm-edit-box {
+  margin-top: 8px;
+  padding: 8px;
+  background: rgba(0, 0, 0, 0.12);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.perm-edit-head {
+  font-size: 11.5px;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+.perm-edit-input {
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--fg);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  padding: 6px 8px;
+  resize: vertical;
+}
+.perm-edit-err {
+  color: #d97c70;
+  font-size: 11.5px;
+  margin-top: 4px;
+}
+.perm-edit:hover {
+  border-color: var(--accent);
+  color: var(--accent);
 }
 .perm-allow {
   border-color: var(--accent);
@@ -1556,6 +1672,57 @@ code,
 .converse-send:disabled {
   opacity: 0.45;
   cursor: default;
+}
+/* A-2：斜杠命令下拉菜单 */
+.slash-menu {
+  margin: 0 0 6px 0;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  overflow: hidden;
+  font-size: 12.5px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.18);
+}
+.slash-item {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 5px 10px;
+  cursor: pointer;
+  color: var(--fg);
+}
+.slash-item.active {
+  background: rgba(90, 169, 255, 0.16);
+}
+.slash-cmd {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-weight: 600;
+  color: var(--accent);
+  min-width: 80px;
+}
+.slash-desc {
+  color: var(--muted);
+  font-size: 11.5px;
+}
+.slash-hint {
+  padding: 3px 10px;
+  font-size: 10.5px;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.02);
+  border-top: 1px solid var(--border);
+}
+
+/* A-1：中断状态 —— 红橙色（区分发送），动画提示"正在响应中" */
+.converse-send.abort {
+  background: #c75d4f;
+  animation: abort-pulse 1.8s ease-in-out infinite;
+}
+.converse-send.abort:hover {
+  background: #d96e60;
+}
+@keyframes abort-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(199, 93, 79, 0.4); }
+  50% { box-shadow: 0 0 0 4px rgba(199, 93, 79, 0); }
 }
 
 /* ── 全局视角面板 ── */
