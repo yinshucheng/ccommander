@@ -13,6 +13,8 @@ pnpm install                          # 用 pnpm，不是 npm
 
 ./start.sh                            # 首选：一键拉起（缺 dist 自动构建 + 装 hook + 起服务 + 开浏览器）
 ./start.sh --port 4000 --no-open      # 开关：--port/--build/--install-hooks/--open 及 --no-* 反向
+./start.sh --bg --env prod --no-open  # 后台跑：日志/pid 落 /tmp/commander-<env>.{log,pid}，关终端不死
+./start.sh --stop --env prod          # 停指定 env 的后台进程
 ./start.sh --help                     # 全部开关
 
 pnpm build                            # vite 构建前端到 dist/（server 托管它）
