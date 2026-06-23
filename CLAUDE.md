@@ -16,6 +16,7 @@ pnpm install                          # 用 pnpm，不是 npm
 ./start.sh --bg --env prod --no-open  # 后台跑：日志/pid 落 /tmp/commander-<env>.{log,pid}，关终端不死
 ./start.sh --stop --env prod          # 停指定 env 的后台进程
 ./start.sh --help                     # 全部开关
+# 幂等：重跑同一条命令会自动杀掉端口上的旧 commander 再起新的（改后端重跑即可，不用手动 kill）
 
 pnpm build                            # vite 构建前端到 dist/（server 托管它）
 pnpm dev                              # server(3890) + vite(5173) 并行，前端热更
@@ -36,6 +37,8 @@ server 模块在进程启动时被缓存。**改 `src/server/*.js` 后只 `pnpm 
 ```bash
 pkill -f "commander.js serve"; node bin/commander.js serve --port 3890
 ```
+
+> 跑 `start.sh`（前台或 `--bg` 后台都行）即可自动完成这一步——它幂等:重跑同一条命令会先杀掉端口上的旧 commander 再起新的,不用手动 `pkill`。只有绕过 `start.sh` 直接 `node bin/commander.js serve` 时才需要上面那行手动 kill。
 
 只改前端则 `pnpm build`（或 `pnpm dev` 热更）即可,无需重启 server。
 

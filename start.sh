@@ -3,6 +3,10 @@
 # 默认贴心：缺 dist 自动构建、未装 hook 自动安装、起服务、开浏览器。
 # 用开关精确控制；--no-* 关掉对应默认行为。
 #
+# 幂等重启：启动前会清掉该端口上的 commander 旧进程（前台/后台都覆盖），
+# 所以「改了后端代码 → 重跑同一条 start.sh」就能自动换新进程，不用手动 kill。
+# 非 commander 进程占着端口则不误杀，会报冲突让你手动处理。
+#
 # 后台模式（--background / --bg / -d）：把服务 detach 到后台，stdout/stderr
 # 写进 /tmp 下按 --env 命名的日志文件，并落 pid 文件。终端关了服务也不死，
 # 你可以 `tail -f /tmp/commander-<env>.log` 自己看，或让 AI 工具读这个固定路径。
@@ -21,6 +25,58 @@ BACKGROUND=0        # 0=前台(exec) | 1=后台(nohup + 日志)
 ENV_NAME="main"     # 后台日志/pid 文件的环境标识
 LOG_FILE=""         # 显式指定则覆盖 --env 推导的日志路径
 DO_STOP=0           # --stop：停掉指定 env 的后台进程
+
+# ---- 进程管理辅助（幂等重启靠端口定位，与 wt.sh 同套路）----
+# 端口上的 LISTEN pid 列表（空=没在跑）。lsof 不存在时回退 pgrep。
+pids_on_port() {
+  local port="$1"
+  if command -v lsof >/dev/null 2>&1; then
+    lsof -nP -iTCP:"$port" -sTCP:LISTEN -t 2>/dev/null || true
+  else
+    pgrep -f "commander.js serve --port $port" 2>/dev/null || true
+  fi
+}
+
+# 判断某 pid 是不是 commander server（按命令行匹配，避免误杀同端口的别的进程）
+is_commander_pid() {
+  local pid="$1"
+  [[ -n "$pid" ]] || return 1
+  ps -o command= -p "$pid" 2>/dev/null | grep -q "commander.js serve"
+}
+
+# 杀某 pid：TERM → 等 ≤3s → 仍活则 KILL。不报错（进程可能已退）。
+kill_pid() {
+  local pid="$1"
+  [[ -n "$pid" ]] || return 0
+  kill -0 "$pid" 2>/dev/null || return 0
+  kill "$pid" 2>/dev/null || true
+  for _ in 1 2 3 4 5 6; do
+    kill -0 "$pid" 2>/dev/null || return 0
+    sleep 0.5
+  done
+  kill -9 "$pid" 2>/dev/null || true
+}
+
+# 释放端口：杀掉该端口上的 commander 旧进程（前台/后台都覆盖）。
+# 非 commander 进程占着端口则不动（返回失败，让上层报端口冲突）。
+# 返回 0=已清干净（或本来就空），1=有非 commander 进程挡路。
+free_port() {
+  local port="$1" killed=""
+  local pids; pids="$(pids_on_port "$port")"
+  [[ -z "$pids" ]] && return 0
+  local p
+  for p in $pids; do
+    if is_commander_pid "$p"; then
+      kill_pid "$p"
+      killed="$killed $p"
+    else
+      return 1   # 非 commander 进程占着，不误杀
+    fi
+  done
+  [[ -n "$(pids_on_port "$port")" ]] && return 1
+  [[ -n "${killed// /}" ]] && echo "$killed"
+  return 0
+}
 
 usage() {
   cat <<'EOF'
@@ -46,6 +102,7 @@ Commander ⚡ — 一键启动
 
 裸跑 `./start.sh`：缺 dist 自动构建 + 未装 hook 自动安装 + 起服务 + 开浏览器（前台）。
 后台：`./start.sh --background --env prod`，日志在 /tmp/commander-prod.log。
+幂等：重跑同一条命令会自动杀掉端口上的旧 commander 再起新的（改了后端重跑即可，不用手动 kill）。
 EOF
 }
 
@@ -79,27 +136,33 @@ if [[ -z "$LOG_FILE" ]]; then
   LOG_FILE="/tmp/commander-${ENV_NAME}.log"
 fi
 
-# ---- --stop：停掉指定 env 的后台进程 ----
+# ---- --stop：停掉指定 env 的服务（pid 文件优先，回退端口定位）----
 if [[ "$DO_STOP" == "1" ]]; then
+  STOPPED=""
+  # 1) pid 文件里的后台进程
   if [[ -f "$PID_FILE" ]]; then
     PID="$(cat "$PID_FILE" 2>/dev/null || true)"
     if [[ -n "$PID" ]] && kill -0 "$PID" 2>/dev/null; then
-      kill "$PID" 2>/dev/null || true
-      for _ in 1 2 3 4 5 6; do
-        if ! kill -0 "$PID" 2>/dev/null; then break; fi
-        sleep 0.5
-      done
-      if kill -0 "$PID" 2>/dev/null; then
-        kill -9 "$PID" 2>/dev/null || true
-      fi
+      kill_pid "$PID"
       echo "✓ 已停止 [$ENV_NAME] 后台进程 (pid $PID)"
+      STOPPED=1
     else
       echo "• [$ENV_NAME] pid 文件在但进程已不在 (pid ${PID:-?})，清理"
     fi
     rm -f "$PID_FILE"
-  else
-    echo "• 没有 [$ENV_NAME] 的后台进程记录（$PID_FILE 不存在）"
   fi
+  # 2) 回退：端口上还残留的 commander（前台起的 / pid 文件丢失的）
+  REMAIN_PIDS="$(pids_on_port "$PORT")"
+  if [[ -n "$REMAIN_PIDS" ]]; then
+    for p in $REMAIN_PIDS; do
+      if is_commander_pid "$p"; then
+        kill_pid "$p"
+        echo "✓ 已停止端口 $PORT 上的 commander (pid $p)"
+        STOPPED=1
+      fi
+    done
+  fi
+  [[ -n "$STOPPED" ]] || echo "• [$ENV_NAME] 没有在跑的 commander（端口 $PORT 无监听）"
   exit 0
 fi
 
@@ -147,6 +210,20 @@ if [[ "$DO_HOOKS" == "1" ]]; then
   node bin/commander.js install-hooks
 fi
 
+# ---- 幂等重启：启动前清掉端口上的 commander 旧进程（前台/后台都覆盖）----
+# 「改了后端代码 → 重跑同一条 start.sh」就能自动换新进程，不用手动 kill。
+# 非 commander 进程占着端口则不误杀，报端口冲突让你手动处理。
+OLD_PIDS="$(free_port "$PORT")" || {
+  echo "✗ 端口 $PORT 被非 commander 进程占用，未自动清理（避免误杀）：" >&2
+  lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >&2 2>/dev/null || true
+  exit 1
+}
+if [[ -n "$OLD_PIDS" ]]; then
+  echo "▶ 端口 $PORT 有旧 commander，已停掉 (pid${OLD_PIDS})，换新进程…"
+  # 清掉对应的 stale pid 文件（若旧的是后台进程留下来的）
+  [[ -f "$PID_FILE" ]] && rm -f "$PID_FILE"
+fi
+
 # ---- 开浏览器（后台等服务就绪）----
 if [[ "$OPEN" == "1" ]]; then
   URL="http://localhost:${PORT}"
@@ -158,16 +235,6 @@ fi
 
 # ---- 起服务 ----
 if [[ "$BACKGROUND" == "1" ]]; then
-  # 已有同 env 的后台进程在跑 → 拒绝（避免重复起 / 端口冲突）
-  if [[ -f "$PID_FILE" ]]; then
-    EXISTING="$(cat "$PID_FILE" 2>/dev/null || true)"
-    if [[ -n "$EXISTING" ]] && kill -0 "$EXISTING" 2>/dev/null; then
-      echo "✗ [$ENV_NAME] 已有后台进程在跑 (pid $EXISTING)。先停掉: ./start.sh --stop --env $ENV_NAME" >&2
-      exit 1
-    fi
-    rm -f "$PID_FILE"   # stale pid 文件，清掉
-  fi
-
   # 追加一条分隔头，便于区分多次启动（保留历史，不截断）
   {
     echo ""
