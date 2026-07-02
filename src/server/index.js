@@ -36,8 +36,10 @@ import {
   warmHookServer,
   abortTurn,
   slashCommand,
+  setCommanderApiPort,
 } from './converse.js'
 import { requestPermission, resolvePermission, checkToken, setInternalUrl } from './perm-registry.js'
+import { renderHookOutput } from './clarify-hook.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const DIST = join(__dirname, '../../dist')
@@ -222,6 +224,39 @@ export function startServer({ port = 3890 } = {}) {
     res.json({ ok: hit, matched: hit })
   })
 
+  // PreToolUse hook 长轮询入口：终端 / 网页 spawn 的 claude 走到 AskUserQuestion/
+  // ExitPlanMode 时，hook 脚本 POST 进来。挂起 ≤30 min 等用户在网页 PermissionCard
+  // 作答；resolve 后按 claude hook 的 hookSpecificOutput 协议输出 JSON，hook 脚本把
+  // 这串 JSON 直接 echo 给 claude。
+  //
+  // 协议见：https://code.claude.com/docs/en/hooks（PreToolUse 章节）
+  // 入参 body 是 claude hook 原样转过来的 stdin JSON：
+  //   { session_id, tool_name, tool_input, ... }
+  app.post('/api/clarify-wait', express.json({ limit: '5mb' }), async (req, res) => {
+    const body = req.body || {}
+    const sid = String(body.session_id || body.sessionId || '').trim()
+    const toolName = String(body.tool_name || '').trim()
+    const toolUseId = String(body.tool_use_id || body.toolUseId || `clarify-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
+    const input = body.tool_input ?? body.input ?? {}
+    if (!sid || !toolName) {
+      return res.json(renderHookOutput({ behavior: 'deny', message: '缺少 session_id 或 tool_name' }, toolName, input))
+    }
+    if (toolName !== 'AskUserQuestion' && toolName !== 'ExitPlanMode') {
+      // 不该走这里 —— matcher 配错了。放行不阻塞 claude。
+      return res.json({ continue: true })
+    }
+    // 30 min 长轮询；超时 = deny（claude 把这次工具调用视作 blocked，会自己想下一步）
+    try {
+      const decision = await requestPermission(
+        { sid, tool_use_id: toolUseId, tool_name: toolName, input },
+        { timeoutMs: 30 * 60 * 1000 }
+      )
+      res.json(renderHookOutput(decision, toolName, input))
+    } catch (err) {
+      res.json(renderHookOutput({ behavior: 'deny', message: `commander 内部错误: ${err.message}` }, toolName, input))
+    }
+  })
+
   // ---- Sessions ----
   // 网页内启动全新会话（不带 --resume）：在指定项目目录下 spawn claude -p <text>
   app.post('/api/sessions/new', (req, res) => {
@@ -293,6 +328,8 @@ export function startServer({ port = 3890 } = {}) {
   server.listen(port, () => {
     // 权限审批内部端点（perm-server 子进程回连用）：绑本机回环 + 端口
     setInternalUrl(`http://127.0.0.1:${port}/internal/permission`)
+    // PreToolUse 澄清 hook 用：进程级 settings.json 里 curl /api/clarify-wait 时拼到这个端口
+    setCommanderApiPort(port)
     // 第 2 项：进程级 hook server 现在点火（lazy；不在模块顶层启动，否则测试不退出）
     warmHookServer()
     console.log(`\n  ⚡ Commander 运行在 http://localhost:${port}`)

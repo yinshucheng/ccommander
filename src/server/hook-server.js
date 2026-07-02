@@ -125,15 +125,19 @@ export function subscribe(sid, cb) {
 }
 
 // 生成临时 settings.json，给 spawn 的 claude/ccr 用 --settings 传入。
-// 三个 hook：
+// 四个 hook：
 //   - SessionStart  → POST /hook/session-start（拿到真正的 session_id；compact/fork 也会触发）
 //   - Stop          → POST /hook/stop          （一轮 result，进 waiting）
 //   - Notification  → POST /hook/notification  （idle_prompt / permission_prompt = 等用户）
-// hook command 用 curl —— claude hook 是任意 shell 命令，curl 在 macOS/Linux 默认有；
-// 没有 curl 的环境（罕见）降级用 node。
+//   - PreToolUse    → 直接 POST commanderApiPort 的 /api/clarify-wait（30 min 长轮询）
+//                     与全局 settings 的 PreToolUse 行为一致：网页 spawn 的进程也享有
+//                     AskUserQuestion / ExitPlanMode 弹卡片体验。
+//
+// hook command 用 curl —— claude hook 是任意 shell 命令，curl 在 macOS/Linux 默认有。
 //
 // 返回临时 settings.json 路径，spawn 用完即可调 cleanupHookSettings(path) 删掉。
-export function writeHookSettings(port, tag) {
+// commanderApiPort：主进程对外服务端口（默认 3890），PreToolUse 用它定位 /api/clarify-wait。
+export function writeHookSettings(port, tag, commanderApiPort = 3890) {
   mkdirSync(SETTINGS_DIR, { recursive: true })
   const safeTag = String(tag || `${process.pid}-${Date.now()}`).replace(/[^\w.-]/g, '_')
   const path = join(SETTINGS_DIR, `hook-${safeTag}.json`)
@@ -141,6 +145,12 @@ export function writeHookSettings(port, tag) {
   // claude 把 hook 事件 JSON 从 stdin 传入；用 curl 直转。-s 静默、-m 5 超时 5s 避免阻塞 claude。
   const cmd = (ev) =>
     `cat | curl -s -m 5 -X POST -H 'Content-Type: application/json' --data-binary @- ${url(ev)} >/dev/null 2>&1 || true`
+  // PreToolUse 不同：要拿响应（hookSpecificOutput JSON）打回 stdout 给 claude，
+  // 且 30 min 长轮询。失败兜底输出 {"continue":true} 让 claude 走默认。
+  const clarifyUrl = `http://127.0.0.1:${commanderApiPort}/api/clarify-wait`
+  const clarifyCmd =
+    `resp="$(cat | curl -sS --max-time 1830 -H 'Content-Type: application/json' --data-binary @- ${clarifyUrl} 2>/dev/null)"; ` +
+    `if [ -n "$resp" ]; then printf '%s\\n' "$resp"; else printf '{"continue":true}\\n'; fi`
   const settings = {
     hooks: {
       SessionStart: [{ matcher: '*', hooks: [{ type: 'command', command: cmd('session-start'), timeout: 5 }] }],
@@ -149,6 +159,12 @@ export function writeHookSettings(port, tag) {
         // 与 install-hooks.js 一致：只接 idle_prompt / permission_prompt（其他子类型不算等用户）
         { matcher: 'idle_prompt', hooks: [{ type: 'command', command: cmd('notification'), timeout: 5 }] },
         { matcher: 'permission_prompt', hooks: [{ type: 'command', command: cmd('notification'), timeout: 5 }] },
+      ],
+      PreToolUse: [
+        {
+          matcher: 'AskUserQuestion|ExitPlanMode',
+          hooks: [{ type: 'command', command: clarifyCmd, timeout: 1800 }],
+        },
       ],
     },
   }

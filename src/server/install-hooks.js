@@ -5,11 +5,13 @@ import { fileURLToPath } from 'node:url'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const REPO_EMIT = join(__dirname, '../../hooks/commander-emit.sh')
+const REPO_CLARIFY = join(__dirname, '../../hooks/commander-clarify.sh')
 
 const HOME = homedir()
 const SETTINGS = join(HOME, '.claude', 'settings.json')
 const COMMANDER_BIN = join(HOME, '.commander', 'bin')
 const EMIT_DEST = join(COMMANDER_BIN, 'commander-emit.sh')
+const CLARIFY_DEST = join(COMMANDER_BIN, 'commander-clarify.sh')
 
 // 事件名 → hook 规格。每个 spec 产出一个或多个 hook group。
 // Notification 是个「大伞」事件,含多种子类型(idle_prompt/permission_prompt/
@@ -19,16 +21,30 @@ const EMIT_DEST = join(COMMANDER_BIN, 'commander-emit.sh')
 // 才算 waiting;其余 Notification 子类型不接。详见官方 hooks 文档的 matcher 表。
 const WAITING_MATCHERS = ['idle_prompt', 'permission_prompt']
 
+// PreToolUse 澄清 hook：拦截 AskUserQuestion / ExitPlanMode，转发到 commander
+// 网页 PermissionCard。脚本：commander-clarify.sh；端到端协议见
+// src/server/clarify-hook.js 注释。matcher 是正则字符串，claude 内部用 RegExp 匹配。
+const CLARIFY_TOOLS_MATCHER = 'AskUserQuestion|ExitPlanMode'
+
+// 每个 event 一条 spec。spec.commandBuilder(matcher) 决定 hook 的命令；
+// 没指定就走默认 emit 路径（emitCommand）。
 const HOOK_EVENTS = {
   Notification: { type: 'waiting', matchers: WAITING_MATCHERS },
   Stop: { type: 'completed' },
   SessionStart: { type: 'running' },
   UserPromptSubmit: { type: 'running' },
   SessionEnd: { type: 'closed' },
+  PreToolUse: {
+    type: 'clarify',
+    matchers: [CLARIFY_TOOLS_MATCHER],
+    commandBuilder: () => `bash ${CLARIFY_DEST}`,
+    // 30 分钟：用户可能开会回来才看到卡片，commander 那边长轮询是 30 min。
+    timeout: 1800,
+  },
 }
 
-// 用一个稳定标记识别「这条是 Commander 装的」，便于幂等与卸载
-const TAG = 'commander-emit.sh'
+// 两个稳定标记：脚本名各占一个，便于 uninstall 时把两种 hook 都清掉。
+const TAGS = ['commander-emit.sh', 'commander-clarify.sh']
 
 function emitCommand(eventType) {
   return `bash ${EMIT_DEST} ${eventType}`
@@ -36,10 +52,13 @@ function emitCommand(eventType) {
 
 // 由 spec 产出待注册的 hook group 列表(纯函数,便于测试)。
 // 有 matchers 的 → 每个 matcher 一条独立 group;无 matchers 的 → 一条无 matcher group。
+// spec.commandBuilder?(matcher) 覆盖默认的 emitCommand；spec.timeout 覆盖默认 5s。
 export function buildHookGroups(spec) {
-  const cmd = emitCommand(spec.type)
+  const defaultCmd = emitCommand(spec.type)
+  const buildCmd = spec.commandBuilder || (() => defaultCmd)
+  const timeout = spec.timeout || 5
   const mk = (matcher) => {
-    const g = { hooks: [{ type: 'command', command: cmd, timeout: 5 }] }
+    const g = { hooks: [{ type: 'command', command: buildCmd(matcher), timeout }] }
     if (matcher) g.matcher = matcher
     return g
   }
@@ -47,10 +66,14 @@ export function buildHookGroups(spec) {
   return [mk(null)]
 }
 
-function deployEmitScript() {
+function deployScripts() {
   mkdirSync(COMMANDER_BIN, { recursive: true })
   copyFileSync(REPO_EMIT, EMIT_DEST)
   chmodSync(EMIT_DEST, 0o755)
+  if (existsSync(REPO_CLARIFY)) {
+    copyFileSync(REPO_CLARIFY, CLARIFY_DEST)
+    chmodSync(CLARIFY_DEST, 0o755)
+  }
 }
 
 function loadSettings() {
@@ -71,10 +94,10 @@ function backup() {
   return null
 }
 
-// group 是否是「我们装的」(命令含 TAG)
+// group 是否是「我们装的」(命令含任一 TAG)
 function isOurGroup(group) {
   return (group.hooks || []).some(
-    (h) => typeof h.command === 'string' && h.command.includes(TAG),
+    (h) => typeof h.command === 'string' && TAGS.some((t) => h.command.includes(t)),
   )
 }
 
@@ -94,7 +117,7 @@ export function ensureHook(settings, eventName, spec) {
 
 export function installHooks() {
   if (!existsSync(REPO_EMIT)) throw new Error(`缺少 emit 脚本: ${REPO_EMIT}`)
-  deployEmitScript()
+  deployScripts()
   const bak = backup()
   const settings = loadSettings()
   const added = []
@@ -102,10 +125,16 @@ export function installHooks() {
     if (ensureHook(settings, ev, spec)) added.push(ev)
   }
   writeFileSync(SETTINGS, JSON.stringify(settings, null, 2))
-  return { backup: bak, added, settingsPath: SETTINGS, emitScript: EMIT_DEST }
+  return {
+    backup: bak,
+    added,
+    settingsPath: SETTINGS,
+    emitScript: EMIT_DEST,
+    clarifyScript: existsSync(REPO_CLARIFY) ? CLARIFY_DEST : null,
+  }
 }
 
-// 移除 Commander 追加的 hook（精确匹配 TAG，不动别人的）
+// 移除 Commander 追加的 hook（精确匹配任一 TAG，不动别人的）
 export function uninstallHooks() {
   const bak = backup()
   const settings = loadSettings()
@@ -115,7 +144,7 @@ export function uninstallHooks() {
     const kept = []
     for (const group of arr) {
       const hooks = (group.hooks || []).filter((h) => {
-        const isOurs = typeof h.command === 'string' && h.command.includes(TAG)
+        const isOurs = typeof h.command === 'string' && TAGS.some((t) => h.command.includes(t))
         if (isOurs) removed++
         return !isOurs
       })
