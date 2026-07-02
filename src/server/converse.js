@@ -34,6 +34,12 @@ const procs = new Map()
 // 让 node --test 永远不退出。startServer() 在 listen 完成后主动调一次 warmHookServer()。
 let hookPort = 0
 let hookWarmPromise = null
+// commander 自身对外服务端口（PreToolUse 澄清 hook 需要直接调 /api/clarify-wait）。
+// 由 startServer() listen 完成时通过 setCommanderApiPort() 注入。默认 3890。
+let commanderApiPort = 3890
+export function setCommanderApiPort(p) {
+  if (typeof p === 'number' && p > 0) commanderApiPort = p
+}
 export function warmHookServer() {
   if (hookPort || hookWarmPromise) return hookWarmPromise || Promise.resolve(hookPort)
   hookWarmPromise = startProcHookServer()
@@ -107,7 +113,14 @@ function getPartialState(sid) {
   return s
 }
 
-function parseStreamLine(line, onText, onResult, onSession) {
+// 第 7 个参数 cbs 可选，是新增回调的对象形式，向后兼容老调用方（test/converse.test.mjs 不传它也能跑）：
+//   cbs.onThinking(text, blockId?)       —— thinking 增量/整段（spec 016）
+//   cbs.onToolUse({id, name, input})     —— assistant 里发起的工具调用（spec 016，拆出来让前端能挂 result）
+//   cbs.onToolResult({tool_use_id, content, is_error})  —— user 事件里的工具结果（spec 016）
+export function parseStreamLine(line, onText, onResult, onSession, cbs = {}) {
+  const onThinking = cbs.onThinking || (() => {})
+  const onToolUse = cbs.onToolUse || (() => {})
+  const onToolResult = cbs.onToolResult || (() => {})
   let ev
   try {
     ev = JSON.parse(line)
@@ -118,26 +131,52 @@ function parseStreamLine(line, onText, onResult, onSession) {
     const sid = extractSessionId(ev)
     if (sid) onSession(sid)
   }
-  // 逐字流：partial 模式下的 text_delta —— 这才是用户期望的"打字机"
+  // 逐字流：partial 模式下的 text_delta / thinking_delta —— "打字机"体验
   if (ev.type === 'stream_event') {
     const sid = extractSessionId(ev)
     if (sid) getPartialState(sid).sawPartial = true
     const e = ev.event
-    if (e?.type === 'content_block_delta' && e.delta?.type === 'text_delta' && e.delta.text) {
-      onText(e.delta.text)
+    if (e?.type === 'content_block_delta') {
+      // content_block_delta 自带 index，前端按 index 把同一 block 的多次 delta 拼起来
+      const blockId = typeof e.index === 'number' ? e.index : null
+      if (e.delta?.type === 'text_delta' && e.delta.text) {
+        onText(e.delta.text)
+      } else if (e.delta?.type === 'thinking_delta' && e.delta.thinking) {
+        // Anthropic 文档：thinking_delta 的字段名是 `thinking`（不是 `text`）
+        onThinking(e.delta.thinking, blockId)
+      }
     }
     return
   }
   if (ev.type === 'assistant') {
     const sid = extractSessionId(ev)
-    // partial 模式下整段 `assistant` 是重复内容，跳过文本但保留 tool_use 提示
+    // partial 模式下整段 `assistant` 的 text/thinking 是重复内容，跳过
+    // tool_use 不重复（partial 阶段没拆出来过），无论是否 partial 都要推
     const skipText = sid ? getPartialState(sid).sawPartial : false
     const parts = ev.message?.content || []
     for (const p of parts) {
       if (p.type === 'text' && p.text && !skipText) {
         onText(p.text)
+      } else if (p.type === 'thinking' && !skipText) {
+        // 非 partial 路径的整段 thinking（字段名 thinking，不是 text）
+        const t = p.thinking || p.text || ''
+        if (t) onThinking(t, null)
       } else if (p.type === 'tool_use') {
-        onText(`\n[调用工具: ${p.name}]\n`)
+        onToolUse({ id: p.id, name: p.name, input: p.input || {} })
+      }
+    }
+  } else if (ev.type === 'user') {
+    // tool_result 在 user 事件里：{type:'user', message:{role:'user', content:[{type:'tool_result',...}]}}
+    const parts = ev.message?.content || []
+    if (Array.isArray(parts)) {
+      for (const p of parts) {
+        if (p.type === 'tool_result') {
+          onToolResult({
+            tool_use_id: p.tool_use_id,
+            content: p.content, // 可能是 string 或 array，前端按类型分发
+            is_error: !!p.is_error,
+          })
+        }
       }
     }
   } else if (ev.type === 'result') {
@@ -234,7 +273,7 @@ function buildArgs(sid, opts = {}) {
   const cmdTpl = getConfig().cmdTemplate || ''
   const blockedByCcr = templateUsesCcr(cmdTpl)
   if (hookPort > 0 && !opts.skipHookSettings && !blockedByCcr) {
-    hookSettingsPath = writeHookSettings(hookPort, sid)
+    hookSettingsPath = writeHookSettings(hookPort, sid, commanderApiPort)
     args.push('--settings', hookSettingsPath)
   }
   return { bin, args, mcpConfigPath, hookSettingsPath }
@@ -498,7 +537,16 @@ function ensureProc(initialSid, cwd) {
           broadcast({ type: 'converse', sid: rec.currentSid, phase: 'done', result: r.result || '', ok: r.ok })
         },
         // 第 3 项：每条 stream-json 都查 session_id；变了就迁移（fork/compact）
-        migrateSid
+        migrateSid,
+        // spec 016：thinking / tool_use / tool_result 增量
+        {
+          onThinking: (text, blockId) =>
+            broadcast({ type: 'converse', sid: rec.currentSid, phase: 'thinking_delta', text, blockId }),
+          onToolUse: (use) =>
+            broadcast({ type: 'converse', sid: rec.currentSid, phase: 'tool_use', ...use }),
+          onToolResult: (res) =>
+            broadcast({ type: 'converse', sid: rec.currentSid, phase: 'tool_result', ...res }),
+        }
       )
     }
   })

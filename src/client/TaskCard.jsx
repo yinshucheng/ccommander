@@ -337,7 +337,11 @@ function ContextView({ sid, liveState, onCtx }) {
   const [input, setInput] = useState('')
   const [images, setImages] = useState([]) // 待发送图片 [{ name, dataUrl }]
   const [sending, setSending] = useState(false)
-  const [reply, setReply] = useState('') // 流式拼接的回复
+  const [reply, setReply] = useState('') // 流式拼接的当前 text 段
+  // spec 016：流式增量除了 text，还有 thinking / tool_use / tool_result。
+  // text 段还在累加时不进 liveParts，遇到非 text 增量再把它折成一个 part 推入。
+  // 这样渲染时 liveParts 顺序展示前面所有 part，末尾再接 reply（当前正在打字的 text）。
+  const [liveParts, setLiveParts] = useState([]) // [{kind,text|name|input|result|...}]
   const [sendErr, setSendErr] = useState(null)
   // 待你审批/作答的权限请求（spec 015）：[{ tool_use_id, tool_name, input }]
   const [perms, setPerms] = useState([])
@@ -355,6 +359,7 @@ function ContextView({ sid, liveState, onCtx }) {
   const [slashIdx, setSlashIdx] = useState(0)
 
   const replyRef = useRef('') // 与 reply 同步，done 时读它沉淀历史（避免 setState updater 里嵌套副作用）
+  const livePartsRef = useRef([]) // spec 016：与 liveParts 同步，便于在 onConverse 回调里读到最新
   const scrollRef = useRef(null) // 滚动容器
   const anchorRef = useRef(null) // 上翻加载时保持滚动位置用的锚点
   const atBottomRef = useRef(true) // 续话/新消息时是否自动贴底
@@ -379,6 +384,8 @@ function ContextView({ sid, liveState, onCtx }) {
     setMsgs([])
     replyRef.current = ''
     setReply('')
+    livePartsRef.current = []
+    setLiveParts([])
     setSendErr(null)
     setSending(false)
     setInput('')
@@ -419,6 +426,16 @@ function ContextView({ sid, liveState, onCtx }) {
   // 订阅本会话的续话流式增量
   useEffect(() => {
     if (!sid) return
+    // spec 016：thinking/tool_use/tool_result 到来时，把当前正在累加的 text 段折成一个 part 推进 liveParts。
+    // 这样面板上呈现的顺序是「text → thinking → tool_use → tool_result → 又一段 text」，与真实事件序对齐。
+    // 定义在闭包里而不是组件顶层，是为了直接读到同一个 livePartsRef / replyRef 且能顺手 setReply/setLiveParts。
+    const flushReplyToParts = () => {
+      const cur = replyRef.current
+      if (!cur) return
+      livePartsRef.current.push({ kind: 'text', text: cur })
+      replyRef.current = ''
+      setReply('')
+    }
     return onConverse((m) => {
       if (m.sid !== sid) return
       // 第 4 项：thinking
@@ -439,6 +456,8 @@ function ContextView({ sid, liveState, onCtx }) {
           })
           replyRef.current = ''
           setReply('')
+          livePartsRef.current = []
+          setLiveParts([])
           setSending(false)
         }
         setThinking(false)
@@ -480,14 +499,49 @@ function ContextView({ sid, liveState, onCtx }) {
       if (m.phase === 'delta') {
         replyRef.current += m.text
         setReply((r) => r + m.text)
+      } else if (m.phase === 'thinking_delta') {
+        // spec 016：thinking 增量。先把当前累加的 text 段（如果有）折成 part 推入，再追加/合并 thinking。
+        flushReplyToParts()
+        const txt = m.text || ''
+        // 同一 blockId 的多次增量拼到同一 thinking part；blockId 缺失/不同则起新 part
+        const arr = livePartsRef.current
+        const last = arr[arr.length - 1]
+        if (last && last.kind === 'thinking' && (m.blockId == null || last._blockId === m.blockId)) {
+          last.text = (last.text || '') + txt
+        } else {
+          arr.push({ kind: 'thinking', text: txt, _blockId: m.blockId })
+        }
+        setLiveParts([...arr])
+      } else if (m.phase === 'tool_use') {
+        // spec 016：工具调用拆出来，前端能挂 result。先把当前 text 段折存，再追加 tool_use part。
+        flushReplyToParts()
+        const arr = livePartsRef.current
+        arr.push({ kind: 'tool_use', id: m.id, name: m.name, input: m.input || {} })
+        setLiveParts([...arr])
+      } else if (m.phase === 'tool_result') {
+        // spec 016：把 result 挂到同 id 的 tool_use part 上（同 transcript.js 配对策略）；
+        // 找不到（不该发生但 tolerant）则独立 push 一条 tool_result。
+        flushReplyToParts()
+        const arr = livePartsRef.current
+        const target = arr.find((p) => p.kind === 'tool_use' && p.id === m.tool_use_id)
+        if (target) {
+          target.result = { content: m.content, is_error: m.is_error }
+        } else {
+          arr.push({ kind: 'tool_result', tool_use_id: m.tool_use_id, content: m.content, is_error: m.is_error })
+        }
+        setLiveParts([...arr])
       } else if (m.phase === 'done') {
         setSending(false)
         if (m.ok === false && m.error) setSendErr(m.error)
         // 把这轮 AI 回复沉淀进历史，再清空流式缓冲 —— 否则下一轮 setReply('') 会清掉它，
         // 多轮澄清就此断裂（specs/010）。从 replyRef 读最新文本，避免 setState updater 里嵌套副作用。
+        // liveParts 不沉淀进 msgs —— 刷新后 jsonl 重建会用 transcript.js 的完整版本接管；
+        // 这里只清空，避免下一轮 thinking/tool 残留在面板里。
         setMsgs((prev) => foldReplyIntoHistory(prev, replyRef.current, Date.now()))
         replyRef.current = ''
         setReply('')
+        livePartsRef.current = []
+        setLiveParts([])
       }
     })
   }, [sid])
@@ -541,6 +595,8 @@ function ContextView({ sid, liveState, onCtx }) {
     setSending(true)
     replyRef.current = ''
     setReply('')
+    livePartsRef.current = []
+    setLiveParts([])
     setSendErr(null)
     // 乐观把用户消息追加到历史（带图片张数提示）
     const optimistic = imgs.length ? `${text}${text ? ' ' : ''}[🖼️ ${imgs.length} 张图片]` : text
@@ -721,11 +777,18 @@ function ContextView({ sid, liveState, onCtx }) {
             )
           })}
 
-          {(sending || reply) && (
+          {(sending || reply || liveParts.length > 0) && (
             <div className="ctx-msg assistant streaming">
               <span className="ctx-role">AI</span>
               <span className="ctx-text">
-                {reply ? <Markdown text={reply} /> : '思考中…'}
+                {/* spec 016：先渲染已折存的 parts（thinking / tool_use[+result] / 旧 text 段），
+                    再画当前正在打字的 reply。part 与 transcript.js 输出同构，直接复用 MessagePart。 */}
+                {liveParts.length > 0 && (
+                  <div className="ctx-parts">
+                    {liveParts.map((p, j) => <MessagePart key={j} part={p} />)}
+                  </div>
+                )}
+                {reply ? <Markdown text={reply} /> : (liveParts.length === 0 ? '思考中…' : null)}
                 {sending && <span className="cursor">▋</span>}
               </span>
             </div>

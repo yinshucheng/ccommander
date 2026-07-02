@@ -46,6 +46,7 @@
 | [013](013-spawn-new-session.md) | 网页内启动全新 session：面板分组头「＋ 新会话」 | done | 中 |
 | [014](014-parallel-feature-workflow.md) | 多特性并行开发工作流：git worktree + 运行隔离 | accepted | ★ 高 |
 | [015](015-web-interactive-permission-clarify.md) | 网页续话交互式权限审批 + 澄清作答（L1+L2，长驻进程为 L3 铺路） | done | 高 |
+| [016](016-web-thinking-tool-results.md) | 网页续话显示思考过程 + 工具调用结果 | accepted | ★ 高 |
 
 > 编号 ≠ 实现顺序。优先级见上表，实际排期由用户定。
 
