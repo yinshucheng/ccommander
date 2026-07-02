@@ -330,8 +330,31 @@ export function skipTask(id) {
   const data = getTasks()
   const task = data.tasks.find((t) => t.id === id)
   if (!task) return null
-  task.skipCount = (task.skipCount || 0) + 1
+  // 返回前先把「skip 影响到的两个字段」原样快照打包，供前端 4s 撤销窗口回灌。
+  // 只快照 skip 真正动的字段，不快照整个 task —— 避免撤销窗口内别处改了 title 也被覆盖。
+  const prev = { queuedAt: task.queuedAt, skipCount: task.skipCount || 0 }
+  task.skipCount = prev.skipCount + 1
   task.queuedAt = Date.now() // 重新排到同优先级末尾
+  notifyChange()
+  return { ...task, _prev: prev }
+}
+
+// 撤销 skip：把 queuedAt / skipCount 还原到 prev 快照。
+// 用 prev 而非「减一」是因为：撤销窗口内可能其他动作也碰过 skipCount（虽然 UI 上不太可能），
+// 一律还原成动作前的样子最安全。task 不存在/已是 done 则不做事，返回 null。
+export function unskipTask(id, prev = {}) {
+  if (!prev || typeof prev.queuedAt !== 'number' || typeof prev.skipCount !== 'number') {
+    return null
+  }
+  const data = getTasks()
+  const task = data.tasks.find((t) => t.id === id)
+  if (!task) return null
+  if (task.status === 'done' || task.status === 'skipped') {
+    // task 已被进一步处理，撤销 skip 这一步意义不大；按设计文档「克制」原则不操作。
+    return null
+  }
+  task.queuedAt = prev.queuedAt
+  task.skipCount = prev.skipCount
   notifyChange()
   return task
 }

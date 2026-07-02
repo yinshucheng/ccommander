@@ -15,10 +15,11 @@
     "serve": "node bin/commander.js serve",
     "dev:client": "vite",
     "build": "vite build",
-    "test": "node --test \"test/**/*.test.mjs\"",
+    "test": "node --test test/*.test.mjs",
     "dev": "concurrently -n server,client -c blue,green \"node bin/commander.js serve\" \"vite\""
   },
   "dependencies": {
+    "cross-spawn": "^7.0.6",
     "diff": "^9.0.0",
     "express": "^4.21.2",
     "highlight.js": "^11.11.1",

@@ -17,6 +17,7 @@ import {
   patchTask,
   doneTask,
   skipTask,
+  unskipTask,
   deferTask,
   undeferTask,
   dismissTask,
@@ -27,8 +28,18 @@ import { startScanner, countClaudeProcesses } from './scanner.js'
 import { getConfig, patchConfig } from './config.js'
 import { getSessionContext } from './transcript.js'
 import { analyzeSession } from './analyze.js'
-import { sendMessage, saveUploads, startSession } from './converse.js'
+import {
+  sendMessage,
+  saveUploads,
+  startSession,
+  restartSession,
+  warmHookServer,
+  abortTurn,
+  slashCommand,
+  setCommanderApiPort,
+} from './converse.js'
 import { requestPermission, resolvePermission, checkToken, setInternalUrl } from './perm-registry.js'
+import { renderHookOutput } from './clarify-hook.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const DIST = join(__dirname, '../../dist')
@@ -114,6 +125,12 @@ export function startServer({ port = 3890 } = {}) {
     if (!t) return res.status(404).json({ error: 'not found' })
     res.json(t)
   })
+  // 撤销 skip：req.body.prev 是上一次 /skip 响应里带的 _prev 快照。
+  app.post('/api/tasks/:id/unskip', (req, res) => {
+    const t = unskipTask(req.params.id, req.body?.prev)
+    if (!t) return res.status(404).json({ error: 'not found or already finalized' })
+    res.json(t)
+  })
   app.post('/api/tasks/:id/defer', (req, res) => {
     const t = deferTask(req.params.id, req.body?.minutes ?? 60)
     if (!t) return res.status(404).json({ error: 'not found' })
@@ -177,6 +194,27 @@ export function startServer({ port = 3890 } = {}) {
     res.json({ decision })
   })
 
+  // 第 5 项：会话进程死了后，前端点「重启」走这里 —— 用当前 sid 重新 spawn 长驻进程
+  app.post('/api/sessions/:sid/restart', async (req, res) => {
+    const r = await restartSession(req.params.sid)
+    res.status(r.status || 200).json(r)
+  })
+
+  // A-1：ESC 中断本轮（SIGINT + stdin 注入 reason；详见 converse.js abortTurn 注释）
+  app.post('/api/sessions/:sid/abort', (req, res) => {
+    const r = abortTurn(req.params.sid)
+    res.status(r.status || 200).json(r)
+  })
+
+  // A-2b：斜杠命令分发（commander 端模拟 /plan /clear；透传 /compact 等；拒收 TTY-only）
+  app.post('/api/sessions/:sid/slash', express.json({ limit: '2mb' }), (req, res) => {
+    const line = String(req.body?.text || '').trim()
+    const imagePaths = Array.isArray(req.body?.imagePaths) ? req.body.imagePaths : []
+    if (!line) return res.status(400).json({ ok: false, error: '消息为空' })
+    const r = slashCommand(req.params.sid, line, imagePaths)
+    res.status(r.status || 200).json(r)
+  })
+
   // 公开端点：用户在网页点「允许/拒绝」→ 回灌决定，resolve 对应挂起请求。
   app.post('/api/sessions/:sid/permission', express.json({ limit: '5mb' }), (req, res) => {
     const toolUseId = req.body?.tool_use_id || ''
@@ -184,6 +222,39 @@ export function startServer({ port = 3890 } = {}) {
     if (!toolUseId || !decision) return res.status(400).json({ ok: false, error: '缺少 tool_use_id 或 decision' })
     const hit = resolvePermission(toolUseId, decision)
     res.json({ ok: hit, matched: hit })
+  })
+
+  // PreToolUse hook 长轮询入口：终端 / 网页 spawn 的 claude 走到 AskUserQuestion/
+  // ExitPlanMode 时，hook 脚本 POST 进来。挂起 ≤30 min 等用户在网页 PermissionCard
+  // 作答；resolve 后按 claude hook 的 hookSpecificOutput 协议输出 JSON，hook 脚本把
+  // 这串 JSON 直接 echo 给 claude。
+  //
+  // 协议见：https://code.claude.com/docs/en/hooks（PreToolUse 章节）
+  // 入参 body 是 claude hook 原样转过来的 stdin JSON：
+  //   { session_id, tool_name, tool_input, ... }
+  app.post('/api/clarify-wait', express.json({ limit: '5mb' }), async (req, res) => {
+    const body = req.body || {}
+    const sid = String(body.session_id || body.sessionId || '').trim()
+    const toolName = String(body.tool_name || '').trim()
+    const toolUseId = String(body.tool_use_id || body.toolUseId || `clarify-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
+    const input = body.tool_input ?? body.input ?? {}
+    if (!sid || !toolName) {
+      return res.json(renderHookOutput({ behavior: 'deny', message: '缺少 session_id 或 tool_name' }, toolName, input))
+    }
+    if (toolName !== 'AskUserQuestion' && toolName !== 'ExitPlanMode') {
+      // 不该走这里 —— matcher 配错了。放行不阻塞 claude。
+      return res.json({ continue: true })
+    }
+    // 30 min 长轮询；超时 = deny（claude 把这次工具调用视作 blocked，会自己想下一步）
+    try {
+      const decision = await requestPermission(
+        { sid, tool_use_id: toolUseId, tool_name: toolName, input },
+        { timeoutMs: 30 * 60 * 1000 }
+      )
+      res.json(renderHookOutput(decision, toolName, input))
+    } catch (err) {
+      res.json(renderHookOutput({ behavior: 'deny', message: `commander 内部错误: ${err.message}` }, toolName, input))
+    }
   })
 
   // ---- Sessions ----
@@ -257,6 +328,10 @@ export function startServer({ port = 3890 } = {}) {
   server.listen(port, () => {
     // 权限审批内部端点（perm-server 子进程回连用）：绑本机回环 + 端口
     setInternalUrl(`http://127.0.0.1:${port}/internal/permission`)
+    // PreToolUse 澄清 hook 用：进程级 settings.json 里 curl /api/clarify-wait 时拼到这个端口
+    setCommanderApiPort(port)
+    // 第 2 项：进程级 hook server 现在点火（lazy；不在模块顶层启动，否则测试不退出）
+    warmHookServer()
     console.log(`\n  ⚡ Commander 运行在 http://localhost:${port}`)
     console.log(`     hook 事件 → ~/.commander/events.jsonl  |  扫描兜底已启动\n`)
     const report = buildHealthReport({
