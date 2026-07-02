@@ -10,7 +10,7 @@ import assert from 'node:assert/strict'
 import { readdirSync, statSync, existsSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { getSessionContext } from '../src/server/transcript.js'
+import { getSessionContext, shortModel } from '../src/server/transcript.js'
 
 const PROJECTS_DIR = join(homedir(), '.claude', 'projects')
 
@@ -311,4 +311,59 @@ test('010: 内容恰为 "No response requested." 的真实回复不被误杀（�
     texts.some((t) => /No response requested/.test(t)),
     '前面不是 meta 占位时，这句应被当成正常回复保留'
   )
+})
+
+// ── spec 016: 顶部状态条数据（model / token 占用）───────────────────────
+
+test('016: shortModel 把各种 model id 清洗成短名', () => {
+  assert.equal(shortModel('aws.claude-opus-4.8'), 'opus-4.8')
+  assert.equal(shortModel('claude-opus-4-8-20251001'), 'opus-4.8')
+  assert.equal(shortModel('claude-sonnet-4-6'), 'sonnet-4.6')
+  assert.equal(shortModel('claude-haiku-4-5-20251001'), 'haiku-4.5')
+  assert.equal(shortModel(null), null)
+  assert.equal(shortModel(''), null)
+})
+
+test('016: ctx 返回最后一条 assistant 的 model 与上下文占用百分比', () => {
+  const c = withFixture(
+    [
+      { type: 'user', timestamp: ts, message: { role: 'user', content: '改个 bug' } },
+      {
+        type: 'assistant',
+        timestamp: ts,
+        message: {
+          role: 'assistant',
+          model: 'aws.claude-opus-4.8',
+          content: [{ type: 'text', text: '好的' }],
+          usage: { input_tokens: 1000, cache_read_input_tokens: 19000, output_tokens: 0 },
+        },
+      },
+    ],
+    (sid) => getSessionContext(sid, { limit: 50 })
+  )
+  assert.equal(c.model, 'opus-4.8')
+  // used = 1000 + 19000 + 0 = 20000；窗口 200k → 10%
+  assert.equal(c.context.used, 20000)
+  assert.equal(c.context.window, 200000)
+  assert.equal(c.context.percent, 10)
+})
+
+test('016: usage 全 0（ccr 代理抹平）时 context 为 null，不显示百分比', () => {
+  const c = withFixture(
+    [
+      { type: 'user', timestamp: ts, message: { role: 'user', content: 'hi' } },
+      {
+        type: 'assistant',
+        timestamp: ts,
+        message: {
+          role: 'assistant',
+          model: 'aws.claude-opus-4.8',
+          content: [{ type: 'text', text: 'hi' }],
+          usage: { input_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 0 },
+        },
+      },
+    ],
+    (sid) => getSessionContext(sid, { limit: 50 })
+  )
+  assert.equal(c.context, null)
 })

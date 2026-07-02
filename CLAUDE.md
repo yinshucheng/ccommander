@@ -71,7 +71,7 @@ Claude Code hook ──► ~/.commander/events.jsonl ──► events.js（tail 
 
 ### transcript 渲染（结构化 parts）
 
-- **`transcript.js` `getSessionContext`**：把会话 jsonl 解析成结构化消息,每条 `{seq, role, ts, parts[], text}`。`parts` 的 `kind ∈ text|thinking|tool_use|tool_result|todos`。
+- **`transcript.js` `getSessionContext`**：把会话 jsonl 解析成结构化消息,每条 `{seq, role, ts, parts[], text}`。`parts` 的 `kind ∈ text|thinking|tool_use|tool_result|todos`。还返回会话级元信息供前端顶部状态条用：`model`(最后一条 assistant 的 model 清洗成短名如 `opus-4.8`)、`context`(`{used,window,percent}`,取最后一条 assistant 的 `usage` 算上下文窗口占用百分比；**经 ccr 代理的会话 usage 被抹平成 0 → `context:null`,前端不显示 token chip**)。前端 `ContextView` 把这些 + worktree 名(从 `workingDir` 的 `.worktrees/<slug>` 派生)压进 `ctx-recent-head` 一行,与「历史 N/M」「对话/摘要/全文」档位同行,不新增垂直占位。
 - 后端做 **`tool_use.id ↔ tool_result.tool_use_id` 配对**,结果挂在 `tool_use.result` 上,并吸收/丢弃独立的 tool_result 噪音消息。
 - 保留顶层 `text`（parts 拼成）作兼容字段,供 LLM 分析 / firstMessage。
 - 前端 **`parts.jsx`**：`MessagePart` 按 `kind` 分发到 DiffPart(Edit/Write,jsdiff 行级 diff)/BashPart(命令高亮+折叠输出)/FilePart(Read/Grep/Glob/LS 折叠)/ThinkingPart/TodoPart/GenericToolPart。highlight.js 按需注册 ~13 种语言。

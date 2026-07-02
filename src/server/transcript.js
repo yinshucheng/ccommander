@@ -5,6 +5,44 @@ import { getConfig } from './config.js'
 
 const PROJECTS_DIR = join(homedir(), '.claude', 'projects')
 
+// 把原始 model id 清洗成短名供前端 chip 显示：
+// "aws.claude-opus-4.8" / "claude-opus-4-8-2026..." → "opus-4.8"
+export function shortModel(raw) {
+  if (!raw || typeof raw !== 'string') return null
+  let m = raw.replace(/^[a-z]+\./, '') // 去 "aws." / "vertex." 等前缀
+  m = m.replace(/^claude-/, '') // 去 "claude-"
+  m = m.replace(/-\d{6,}.*$/, '') // 去日期后缀 "-20251001..."
+  const family = m.match(/(opus|sonnet|haiku)/i)?.[1]?.toLowerCase()
+  const ver = m.match(/(\d+)[-.](\d+)/) // "4-8" / "4.8"
+  if (family && ver) return `${family}-${ver[1]}.${ver[2]}`
+  return m || null
+}
+
+// 模型上下文窗口上限（token）。Claude 4.x 全系 200k；拿不到映射时返回 null（前端不显示百分比）。
+function contextWindow(raw) {
+  if (!raw) return null
+  if (/opus|sonnet|haiku/i.test(raw)) return 200000
+  return null
+}
+
+// 当前上下文占用 = 最近一次请求实际喂进模型的总 token（input + 两类 cache + output）。
+// 经 ccr 代理的会话 usage 被抹平（多为 0），此时返回 null，前端不显示 token。
+function contextUsage(usage, model) {
+  if (!usage) return null
+  const used =
+    (usage.input_tokens || 0) +
+    (usage.cache_read_input_tokens || 0) +
+    (usage.cache_creation_input_tokens || 0) +
+    (usage.output_tokens || 0)
+  if (used <= 0) return null
+  const window = contextWindow(model)
+  return {
+    used,
+    window,
+    percent: window ? Math.min(100, Math.round((used / window) * 100)) : null,
+  }
+}
+
 // 注入/系统前缀（与 scanner 一致）：这些不是用户真实意图
 const NOISE_PREFIXES = [
   'Base directory for this skill',
@@ -153,6 +191,8 @@ export function getSessionContext(claudeSessionId, opts = {}) {
   let startedAt = null // 首个带 timestamp 的事件时间
   let compactGen = 0 // 已见过几次 compact 边界（compact 后的消息 gen 更高）
   let sawMeta = false // 上一条是否为 isMeta 占位（用于丢弃紧随其后的空回应）
+  let model = null // 最后一条 assistant 的 model（= 当前会话所用模型）
+  let lastUsage = null // 最后一条 assistant 的 usage（= 最近一次请求的上下文占用）
   const resultsById = new Map() // tool_use_id → tool_result part（第二遍配对用）
 
   for (const l of lines) {
@@ -164,6 +204,12 @@ export function getSessionContext(claudeSessionId, opts = {}) {
     }
     // 会话启动时间：第一个带 timestamp 的事件（含 mode/system 等非对话事件）
     if (startedAt == null && ev.timestamp) startedAt = ev.timestamp
+    // model / usage：每见到 assistant 就刷新，循环结束时留下的就是「最后一条」。
+    // usage 反映最近一次请求实际喂进模型的上下文规模（含 cache_read），最贴近「窗口占用」。
+    if (ev.type === 'assistant' && ev.message) {
+      if (ev.message.model) model = ev.message.model
+      if (ev.message.usage) lastUsage = ev.message.usage
+    }
     // compact 边界：isCompactSummary 标记后的对话属于「新一代」未压缩上下文
     if (ev.isCompactSummary === true) compactGen++
     if (ev.type !== 'user' && ev.type !== 'assistant') continue
@@ -247,6 +293,8 @@ export function getSessionContext(claudeSessionId, opts = {}) {
     userTurns,
     uncompactedTurns,
     compactCount: compactGen,
+    model: shortModel(model),
+    context: contextUsage(lastUsage, model), // { used, window, percent } | null
     firstMessage: firstMsg,
     recentMessages: slice,
     // 还有更早的可上翻？

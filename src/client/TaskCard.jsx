@@ -61,6 +61,14 @@ function datetime(iso) {
 
 const PRIORITY_CLASS = { P0: 'p0', P1: 'p1', P2: 'p2', P3: 'p3' }
 
+// 从 workingDir 派生 worktree 名：本项目约定 worktree 在 `.worktrees/<slug>`，取 slug。
+// 不在 .worktrees/ 下（主检出）→ null，不显示。
+function worktreeName(dir) {
+  if (!dir) return null
+  const m = String(dir).match(/\.worktrees\/([^/]+)/)
+  return m ? m[1] : null
+}
+
 const LIVE = {
   waiting: { dot: '🟡', label: '可能在等你', cls: 'live-waiting' },
   completed: { dot: '✓', label: '已完成', cls: 'live-done' },
@@ -128,7 +136,7 @@ function minutesLabel(m) {
 }
 
 // Source 插件骨架：按 type 分支渲染。本期只实现 claude，codex/web 占位。
-function SourceView({ source, sid, liveState, onCtx }) {
+function SourceView({ source, sid, liveState, workingDir, onCtx }) {
   const type = source?.type || 'claude'
   if (type === 'web') {
     return source.url ? (
@@ -140,7 +148,7 @@ function SourceView({ source, sid, liveState, onCtx }) {
   if (type === 'codex') {
     return <div className="source-todo">Codex 会话渲染即将支持（架构已预留）</div>
   }
-  return <ContextView sid={sid} liveState={liveState} onCtx={onCtx} />
+  return <ContextView sid={sid} liveState={liveState} workingDir={workingDir} onCtx={onCtx} />
 }
 
 // Talk 档：被隐藏的连续工具/thinking 收成一条占位条，点击临时展开整组（spec 012）。
@@ -327,7 +335,7 @@ function ToolPermissionCard({ tool, input, allow, deny }) {
   )
 }
 
-function ContextView({ sid, liveState, onCtx }) {
+function ContextView({ sid, liveState, workingDir, onCtx }) {
   const [viewMode, setViewMode] = useViewMode() // 批阅档位（全局共享）
   const [ctx, setCtx] = useState(null)
   const [msgs, setMsgs] = useState([]) // 已加载的历史消息（含上翻的）
@@ -726,10 +734,24 @@ function ContextView({ sid, liveState, onCtx }) {
     <div className="ctx">
       <div className="ctx-recent">
         <div className="ctx-recent-head">
-          <span>
-            历史 {msgs.length} / 共 {ctx.total} 条
+          <div className="ctx-status">
+            <span className="ctx-stat-count">
+              {msgs.length}/{ctx.total}
+            </span>
+            {ctx.model && <span className="ctx-chip" title="会话所用模型">🤖 {ctx.model}</span>}
+            {worktreeName(workingDir) && (
+              <span className="ctx-chip wt" title={workingDir}>🌿 {worktreeName(workingDir)}</span>
+            )}
+            {ctx.context?.percent != null && (
+              <span
+                className={`ctx-chip ctx-token${ctx.context.percent >= 80 ? ' hot' : ''}`}
+                title={`上下文占用 ${ctx.context.used.toLocaleString()} / ${ctx.context.window.toLocaleString()} tokens`}
+              >
+                🔋 {ctx.context.percent}%
+              </span>
+            )}
             {thinking && <span className="thinking-pill" title="检测到正在调用模型/工具">● 正在思考</span>}
-          </span>
+          </div>
           <div className="view-seg" role="tablist" aria-label="批阅视图">
             {VIEW_MODES.map((m) => (
               <button
@@ -1231,6 +1253,7 @@ export default function TaskCard({ task, onAct, api, deferDefault = 30 }) {
             source={s.source || { type: 'claude' }}
             sid={s.claudeSessionId}
             liveState={s.liveState}
+            workingDir={s.workingDir}
             onCtx={setCtx}
           />
         )}
