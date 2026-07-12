@@ -11,6 +11,37 @@ import { resolveCurrent, selectedExists } from './review-select.js'
 const VIEW_KEY = 'commander.view'
 const PIN_KEY = 'commander.railPinned'
 
+// 聚焦状态条（spec 017）：queue.focus 生效时横幅显示 + 本地倒计时 + 退出。
+// 倒计时纯前端算（until - now），到点自动消失（后端 tickDefer 也会清 focus 并广播）。
+function FocusBanner({ focus, onExit }) {
+  const [, tick] = useState(0)
+  useEffect(() => {
+    if (!focus) return
+    const id = setInterval(() => tick((n) => n + 1), 1000)
+    return () => clearInterval(id)
+  }, [focus])
+  if (!focus) return null
+  const leftMs = focus.until - Date.now()
+  if (leftMs <= 0) return null
+  const totalSec = Math.floor(leftMs / 1000)
+  const h = Math.floor(totalSec / 3600)
+  const m = Math.floor((totalSec % 3600) / 60)
+  const s = totalSec % 60
+  const left = h > 0 ? `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}` : `${m}:${String(s).padStart(2, '0')}`
+  const n = focus.taskIds?.length ?? 0
+  return (
+    <div className="focus-banner" role="status">
+      <span className="focus-banner-icon">🎯</span>
+      <span className="focus-banner-text">
+        聚焦中 · 只调度 <b>{n}</b> 个任务（+ 真在等你的会话）· 剩 <b>{left}</b>
+      </span>
+      <button className="focus-banner-exit" onClick={onExit} title="退出聚焦，恢复全量调度">
+        退出
+      </button>
+    </div>
+  )
+}
+
 export default function App() {
   const [queue, setQueue] = useState({ current: null, waiting: [], deferred: [], done: [] })
   const [view, setView] = useState(() => localStorage.getItem(VIEW_KEY) || 'review')
@@ -216,6 +247,7 @@ export default function App() {
       </div>
 
       <div className="app-main">
+        <FocusBanner focus={queue.focus} onExit={() => act(() => api.clearFocus())} />
         {view === 'board' ? (
           <main className="stage board-mode">
             <Board

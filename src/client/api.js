@@ -22,6 +22,9 @@ export const api = {
   defer: (id, minutes) => req(`/api/tasks/${id}/defer`, 'POST', { minutes }),
   undefer: (id) => req(`/api/tasks/${id}/undefer`, 'POST'),
   dismiss: (id) => req(`/api/tasks/${id}/dismiss`, 'POST'),
+  // 聚焦窗口（spec 017）：圈选一批 task + 时长(分钟)进入聚焦；清除退出。
+  setFocus: (taskIds, minutes) => req('/api/focus', 'POST', { taskIds, minutes }),
+  clearFocus: () => req('/api/focus', 'DELETE'),
   // 配置
   getConfig: () => req('/api/config'),
   patchConfig: (data) => req('/api/config', 'PATCH', data),

@@ -29,7 +29,8 @@ const DIMENSIONS = [
 const GROUPBY_KEY = 'commander.board.groupBy'
 
 // 行内操作：done/skip/defer 复用 App 的 act（含 refresh + toast）。
-function BoardRow({ t, api, onAct, onReview, deferDefault, deferred }) {
+// selectMode: 聚焦选择模式下——行左侧显示勾选框，点整行即切换选中（不触发批阅/操作）。
+function BoardRow({ t, api, onAct, onReview, deferDefault, deferred, selectMode, selected, onToggleSelect }) {
   const proj = (t.sessionDetails || [])[0]
   const projName = proj?.projectName
   const branch = proj?.gitBranch
@@ -37,7 +38,19 @@ function BoardRow({ t, api, onAct, onReview, deferDefault, deferred }) {
   const meta = { title: t.title || '(未命名任务)' }
 
   return (
-    <div className="board-row">
+    <div
+      className={`board-row${selectMode ? ' selectable' : ''}${selected ? ' selected' : ''}`}
+      onClick={selectMode ? () => onToggleSelect(t.id) : undefined}
+    >
+      {selectMode && (
+        <input
+          type="checkbox"
+          className="br-check"
+          checked={selected}
+          readOnly
+          tabIndex={-1}
+        />
+      )}
       <span className="br-dot">{LIVE_DOT[t.liveState] || '•'}</span>
       <span className="br-prio">
         <PriorityBadge
@@ -56,6 +69,7 @@ function BoardRow({ t, api, onAct, onReview, deferDefault, deferred }) {
         </span>
       )}
       <span className="br-age">{deferred ? deferLeft(t.deferUntil) : age(t.queuedAt)}</span>
+      {!selectMode && (
       <span className="br-acts">
         <button
           className="q-act"
@@ -105,6 +119,7 @@ function BoardRow({ t, api, onAct, onReview, deferDefault, deferred }) {
           </>
         )}
       </span>
+      )}
     </div>
   )
 }
@@ -168,13 +183,46 @@ function NewSessionInline({ workingDir, api, onDone, onCancel }) {
   )
 }
 
+const FOCUS_DURATIONS = [
+  { label: '30m', minutes: 30 },
+  { label: '1h', minutes: 60 },
+  { label: '2h', minutes: 120 },
+  { label: '4h', minutes: 240 },
+]
+
 export default function Board({ queue, api, onAct, onReview, deferDefault = 30, scrollTo, onScrolled }) {
   const [groupBy, setGroupBy] = useState(
     () => localStorage.getItem(GROUPBY_KEY) || 'project'
   )
   // 当前展开「＋ 新会话」输入的分组 key（同时只开一个）
   const [openProj, setOpenProj] = useState(null)
+  // 聚焦选择模式（spec 017）：进入后行可勾选，选完设 focus 窗口
+  const [selectMode, setSelectMode] = useState(false)
+  const [selected, setSelected] = useState(() => new Set())
+  const [minutes, setMinutes] = useState(120)
+  const [focusing, setFocusing] = useState(false)
   const waitingRef = useRef(null)
+
+  const toggleSelect = (id) =>
+    setSelected((prev) => {
+      const next = new Set(prev)
+      next.has(id) ? next.delete(id) : next.add(id)
+      return next
+    })
+  const exitSelect = () => {
+    setSelectMode(false)
+    setSelected(new Set())
+  }
+  const startFocus = async () => {
+    if (selected.size === 0 || focusing) return
+    setFocusing(true)
+    try {
+      await onAct(() => api.setFocus([...selected], minutes))
+      exitSelect()
+    } finally {
+      setFocusing(false)
+    }
+  }
 
   useEffect(() => {
     localStorage.setItem(GROUPBY_KEY, groupBy)
@@ -216,7 +264,45 @@ export default function Board({ queue, api, onAct, onReview, deferDefault = 30, 
             {d.label}
           </button>
         ))}
+        <span className="board-toolbar-spacer" />
+        {selectMode ? (
+          <button className="tab" onClick={exitSelect}>
+            取消选择
+          </button>
+        ) : (
+          <button
+            className="tab focus-enter"
+            title="进入选择模式：勾选一批任务，设一段时间只调度它们"
+            onClick={() => setSelectMode(true)}
+          >
+            🎯 聚焦
+          </button>
+        )}
       </div>
+
+      {selectMode && (
+        <div className="focus-bar">
+          <span className="focus-bar-count">已选 {selected.size} 个</span>
+          <span className="focus-bar-durs">
+            {FOCUS_DURATIONS.map((d) => (
+              <button
+                key={d.minutes}
+                className={`tab${minutes === d.minutes ? ' active' : ''}`}
+                onClick={() => setMinutes(d.minutes)}
+              >
+                {d.label}
+              </button>
+            ))}
+          </span>
+          <button
+            className="tab focus-go"
+            disabled={selected.size === 0 || focusing}
+            onClick={startFocus}
+          >
+            {focusing ? '设置中…' : `🎯 聚焦这 ${selected.size} 个`}
+          </button>
+        </div>
+      )}
 
       {empty ? (
         <div className="empty board-empty">
@@ -239,14 +325,32 @@ export default function Board({ queue, api, onAct, onReview, deferDefault = 30, 
                 <div className="board-group-head">
                   <span className="bg-label">{g.label}</span>
                   <span className="bg-count">{g.items.length}</span>
-                  {groupBy === 'project' && g.workingDir && (
+                  {selectMode ? (
                     <button
                       className="bg-new"
-                      title={`在 ${g.workingDir} 开新会话`}
-                      onClick={() => setOpenProj(openProj === g.key ? null : g.key)}
+                      title="整选/取消本组"
+                      onClick={() => {
+                        const ids = g.items.map((t) => t.id)
+                        const allSel = ids.every((id) => selected.has(id))
+                        setSelected((prev) => {
+                          const next = new Set(prev)
+                          ids.forEach((id) => (allSel ? next.delete(id) : next.add(id)))
+                          return next
+                        })
+                      }}
                     >
-                      ＋ 新会话
+                      {g.items.every((t) => selected.has(t.id)) ? '取消本组' : '整选本组'}
                     </button>
+                  ) : (
+                    groupBy === 'project' && g.workingDir && (
+                      <button
+                        className="bg-new"
+                        title={`在 ${g.workingDir} 开新会话`}
+                        onClick={() => setOpenProj(openProj === g.key ? null : g.key)}
+                      >
+                        ＋ 新会话
+                      </button>
+                    )
                   )}
                 </div>
               )}
@@ -270,6 +374,9 @@ export default function Board({ queue, api, onAct, onReview, deferDefault = 30, 
                   onReview={onReview}
                   deferDefault={deferDefault}
                   deferred={t._seg === 'deferred'}
+                  selectMode={selectMode}
+                  selected={selected.has(t.id)}
+                  onToggleSelect={toggleSelect}
                 />
               ))}
             </section>
