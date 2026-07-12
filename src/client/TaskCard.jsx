@@ -3,6 +3,7 @@ import { api, onConverse } from './api.js'
 import { Markdown, MessagePart, CollapsedPart } from './parts.jsx'
 import { foldReplyIntoHistory } from './converse-fold.js'
 import { planView, VIEW_MODES, VIEW_MODE_LABEL, DEFAULT_MODE } from './view-mode.js'
+import PriorityBadge from './PriorityBadge.jsx'
 
 // 批阅视图档位：全局共享一个开关（spec 012），存 localStorage，跨卡片同步。
 const VIEW_MODE_KEY = 'commander.viewMode'
@@ -58,8 +59,6 @@ function datetime(iso) {
   if (sameDay) return hh
   return `${d.getMonth() + 1}/${d.getDate()} ${hh}`
 }
-
-const PRIORITY_CLASS = { P0: 'p0', P1: 'p1', P2: 'p2', P3: 'p3' }
 
 // 从 workingDir 派生 worktree 名：本项目约定 worktree 在 `.worktrees/<slug>`，取 slug。
 // 不在 .worktrees/ 下（主检出）→ null，不显示。
@@ -981,7 +980,11 @@ function MetaColumn({ task, session, ctx, live, onAct, api, deferDefault = 30, a
     <aside className="col-meta">
       <div className="meta-badges">
         {live && <span className={`badge ${live.cls}`}>{live.dot} {live.label}</span>}
-        <span className={`badge ${PRIORITY_CLASS[task.priority]}`}>{task.priority}</span>
+        <PriorityBadge
+          task={task}
+          api={api}
+          onChanged={(id, priority) => onAct(() => api.patchTask(id, { priority }))}
+        />
       </div>
 
       {(ctx?.firstMessage?.text || task.title) && (

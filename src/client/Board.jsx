@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { groupTasks } from './board-group.js'
+import PriorityBadge from './PriorityBadge.jsx'
 
 function age(ts) {
   if (!ts) return ''
@@ -17,7 +18,6 @@ function deferLeft(ts) {
 }
 
 const LIVE_DOT = { waiting: '🟡', running: '🔵', idle: '⚪', completed: '✓' }
-const PRIORITY_CLASS = { P0: 'p0', P1: 'p1', P2: 'p2', P3: 'p3' }
 
 const DIMENSIONS = [
   { key: 'project', label: '项目' },
@@ -39,7 +39,13 @@ function BoardRow({ t, api, onAct, onReview, deferDefault, deferred }) {
   return (
     <div className="board-row">
       <span className="br-dot">{LIVE_DOT[t.liveState] || '•'}</span>
-      <span className={`badge ${PRIORITY_CLASS[t.priority] || 'p2'} br-prio`}>{t.priority}</span>
+      <span className="br-prio">
+        <PriorityBadge
+          task={t}
+          api={api}
+          onChanged={(id, priority) => onAct(() => api.patchTask(id, { priority }))}
+        />
+      </span>
       <span className="br-title" title={t.title}>
         {t.title || '(无标题)'}
       </span>

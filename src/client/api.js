@@ -14,6 +14,8 @@ export const api = {
   stats: () => req('/api/stats'),
   overview: () => req('/api/overview'),
   add: (data) => req('/api/tasks', 'POST', data),
+  // 改任务字段（当前用于改优先级）；后端 patchTask 白名单：title/context/priority/type/notes
+  patchTask: (id, data) => req(`/api/tasks/${id}`, 'PATCH', data),
   done: (id, notes) => req(`/api/tasks/${id}/done`, 'POST', { notes }),
   skip: (id) => req(`/api/tasks/${id}/skip`, 'POST'),
   unskip: (id, prev) => req(`/api/tasks/${id}/unskip`, 'POST', { prev }),
