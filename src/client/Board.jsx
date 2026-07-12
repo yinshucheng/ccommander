@@ -18,6 +18,8 @@ function deferLeft(ts) {
 }
 
 const LIVE_DOT = { waiting: '🟡', running: '🔵', idle: '⚪', completed: '✓' }
+// 选择模式下 badge 退回只读展示用（非选择模式走可点的 PriorityBadge）
+const PRIORITY_CLASS = { P0: 'p0', P1: 'p1', P2: 'p2', P3: 'p3' }
 
 const DIMENSIONS = [
   { key: 'project', label: '项目' },
@@ -52,13 +54,18 @@ function BoardRow({ t, api, onAct, onReview, deferDefault, deferred, selectMode,
         />
       )}
       <span className="br-dot">{LIVE_DOT[t.liveState] || '•'}</span>
-      <span className="br-prio">
-        <PriorityBadge
-          task={t}
-          api={api}
-          onChanged={(id, priority) => onAct(() => api.patchTask(id, { priority }))}
-        />
-      </span>
+      {selectMode ? (
+        // 选择模式下优先级 badge 退回只读，整行点击用于勾选，避免误触弹出下拉
+        <span className={`badge ${PRIORITY_CLASS[t.priority] || 'p2'} br-prio`}>{t.priority}</span>
+      ) : (
+        <span className="br-prio">
+          <PriorityBadge
+            task={t}
+            api={api}
+            onChanged={(id, priority) => onAct(() => api.patchTask(id, { priority }))}
+          />
+        </span>
+      )}
       <span className="br-title" title={t.title}>
         {t.title || '(无标题)'}
       </span>
