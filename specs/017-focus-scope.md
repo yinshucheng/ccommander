@@ -1,6 +1,6 @@
 # 017 — 聚焦窗口（Focus Scope）：时间窗内只调度圈选的任务
 
-- **状态**: accepted
+- **状态**: done
 - **优先级**: 中
 - **作者**: yinshucheng
 - **创建**: 2026-07-12
@@ -151,4 +151,23 @@ export function clearFocus() {
 
 ## 实现记录
 
-（完成后填）
+在 worktree `feat/focus-scope` 分两阶段实现，rebase 到含 016+priority 的 main 后 ff 合入。
+
+**阶段一（后端）** — commit `47c7462`
+- `scheduler.js`：`inFocusScope(task, focus, now)` 纯函数；`rank`/`pickCurrent`/`groupQueue` 加 `focus` 参数并透传（排序键一个不动）。
+- `tasks.js`：`setFocus`/`clearFocus`（走 `notifyChange`）；`buildQueue`/`buildCurrent` 读并透传 focus；`buildQueue` 返回体带 `focus`（惰性判定：过期不透出）；`tickDefer` 顺带清过期窗口。
+- `index.js`：`POST /api/focus {taskIds,minutes}`、`DELETE /api/focus`。
+- `test/focus-scope.test.mjs`：8 条（6 纯函数 + 2 rank 集成）。
+- happy path：curl 圈选→队列只剩圈选+waiting；DELETE/过期→恢复全量。
+
+**阶段二（前端）** — commit `c76d078`
+- `api.js`：`setFocus`/`clearFocus`。
+- `Board.jsx`：「🎯 聚焦」进选择模式，行勾选框 + 整选本组，底部时长档（30m/1h/2h/4h，默认 2h）+ 开始。
+- `App.jsx`：`FocusBanner` 顶部状态条，前端本地倒计时，退出调 `clearFocus`。
+- `styles.css`：focus-bar / 选中行 / 状态条样式。
+
+**合并适配** — commit `c0306ad`
+- rebase 到含 priority 特性（可点 `PriorityBadge`）的 main 后：选择模式下 badge 退回只读 span，整行点击专用于勾选，避免点 badge 误弹优先级下拉。补回被 priority commit 删掉的 `PRIORITY_CLASS`。
+- 浏览器实测两特性共存不打架：非选择模式 badge 可点弹下拉；选择模式 badge 只读、点行勾选。
+
+**与原方案的偏差**：无。按 spec 落地，`autoReviveIfEmpty` 相互作用经 `inFocusScope` 只读判定天然规避（focus 不参与 `isQueued`）。二期（多窗口作息表、硬专注压住 waiting）未做，按非目标搁置。
