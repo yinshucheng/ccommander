@@ -65,7 +65,8 @@ Claude Code hook ──► ~/.commander/events.jsonl ──► events.js（tail 
 ### 任务 ↔ 会话模型（`tasks.js` + `scheduler.js`）
 
 - 一个 **task** 聚合若干 **session**。会话发现时自动建 `implicit: true` 的隐式 task。
-- **排序优先级**（`scheduler.js` `rank()`）：P0 置顶 → **liveState 权重 `waiting > completed > running > idle`**(让等你的先冒出来) → 优先级 P0-P3 → skipCount 降权 → queuedAt 升序。
+- **排序优先级**（`scheduler.js` `rank()`）：先过 **聚焦窗口过滤**（见下）→ 再排序：P0 置顶 → **liveState 权重 `waiting > completed > running > idle`**(让等你的先冒出来) → 优先级 P0-P3 → skipCount 降权 → queuedAt 升序。
+- **聚焦窗口(focus,spec 017)**:全局单个窗口 `{taskIds, until}`(存 `data/tasks.json` 顶层)。`inFocusScope` 是 `rank()` 里 `isQueued` 之后叠加的一道纯函数过滤(**不改任何排序键**):窗口生效(`until>now`)时只放行圈选的 task,没圈选的一律隐藏,**唯一例外 `liveState==='waiting'` 破例冒出**(真在等你,别因专注漏事);**P0 也不例外——聚焦优先于 P0 硬置顶**。无窗口/已过期(惰性判定)则全放行=等于没这功能。`setFocus`/`clearFocus`(`tasks.js`)走 `notifyChange`;`tickDefer` 顺带清过期窗口。`deferred`/`done` 不受 focus 约束。
 - 操作:`done`/`skip`(重排到同档末尾)/`defer`(定时 `tickDefer` 到点复活)/`dismiss`(标记会话 `dismissed`,不再被扫描复活,除非来新的 waiting hook)。
 - 任何改队列的操作走 `notifyChange()` → 持久化 + ws 广播 `queue_updated`,current 变了再推 `new_current`。
 

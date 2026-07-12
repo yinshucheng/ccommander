@@ -1,4 +1,6 @@
 // 排序引擎
+// 0. 聚焦窗口(focus)生效时,先过一道 inFocusScope 过滤(spec 017):只放行圈选的
+//    + 破例的 waiting,再进下面的排序。这道过滤在排序之前、不改任何排序键。
 // 1. deferUntil 未到的任务不参与（隐藏）
 // 2. P0 始终置顶
 // 3. liveState 权重：🟡可能在等你 > ✓已完成 > 🔵在跑 > ⚪静默（让等你的会话先冒出来）
@@ -18,9 +20,21 @@ export function isQueued(task, now = Date.now()) {
   return true
 }
 
-export function rank(tasks, now = Date.now()) {
+// 聚焦窗口过滤（spec 017）：窗口生效(focus && focus.until > now)时——
+//   圈选的 task 放行；没圈选的一律隐藏，【唯一例外】liveState==='waiting' 破例冒出来
+//   （真在等你/卡权限，别因专注而漏事）。P0 不例外——聚焦优先于 P0 硬置顶。
+// 无窗口 / 已过期 → 全放行（惰性判定：即便定时器还没清过期窗口，这里也当它不存在）。
+// 纯函数，可单测。
+export function inFocusScope(task, focus, now = Date.now()) {
+  if (!focus || !focus.until || focus.until <= now) return true
+  if (focus.taskIds?.includes(task.id)) return true
+  return task.liveState === 'waiting'
+}
+
+export function rank(tasks, now = Date.now(), focus = null) {
   return tasks
     .filter((t) => isQueued(t, now))
+    .filter((t) => inFocusScope(t, focus, now))
     .sort((a, b) => {
       // P0 始终置顶
       const p0a = a.priority === 'P0' ? 0 : 1
@@ -56,14 +70,16 @@ export function shouldAutoReviveAll(tasks, now = Date.now()) {
 }
 
 // 选出当前应该处理的任务（队列首位）
-export function pickCurrent(tasks, now = Date.now()) {
-  const ranked = rank(tasks, now)
+export function pickCurrent(tasks, now = Date.now(), focus = null) {
+  const ranked = rank(tasks, now, focus)
   return ranked[0] ?? null
 }
 
-// 把任务分组，供侧边队列面板展示
-export function groupQueue(tasks, now = Date.now()) {
-  const ranked = rank(tasks, now)
+// 把任务分组，供侧边队列面板展示。
+// focus 只约束「当前可调度集」(current+waiting)；deferred/done 不受 focus 过滤
+// （deferred 本就不在调度里，done 是历史）。
+export function groupQueue(tasks, now = Date.now(), focus = null) {
+  const ranked = rank(tasks, now, focus)
   const current = ranked[0] ?? null
   const waiting = ranked.slice(1)
   const deferred = tasks.filter(

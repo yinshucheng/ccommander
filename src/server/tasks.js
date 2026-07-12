@@ -11,8 +11,8 @@ function genId(prefix) {
 
 // 拼装 current 任务 + 它关联的 session 详情（供面板展示命令/目录/上次输出）
 export function buildCurrent() {
-  const { tasks } = getTasks()
-  const task = pickCurrent(tasks)
+  const { tasks, focus } = getTasks()
+  const task = pickCurrent(tasks, Date.now(), focus)
   if (!task) return null
   const { sessions } = getSessions()
   const linked = (task.sessions || [])
@@ -22,9 +22,9 @@ export function buildCurrent() {
 }
 
 export function buildQueue() {
-  const { tasks } = getTasks()
+  const { tasks, focus } = getTasks()
   const { sessions } = getSessions()
-  const groups = groupQueue(tasks)
+  const groups = groupQueue(tasks, Date.now(), focus)
   const attach = (t) => {
     if (!t) return t
     const linked = (t.sessions || [])
@@ -45,6 +45,9 @@ export function buildQueue() {
     done: groups.done.map(attach),
     skippedTotal,
     skippedTasks,
+    // 聚焦窗口原样透出(spec 017),前端据 until 本地算剩余时间 + 渲染状态条。
+    // 惰性判定:已过期的窗口不透出(视为无窗口)。
+    focus: focus && focus.until > Date.now() ? focus : null,
   }
 }
 
@@ -402,16 +405,42 @@ export function undeferTask(id) {
   return task
 }
 
-// defer 到点的任务需要重新浮现 — 由定时器周期性触发重算
+// defer 到点的任务需要重新浮现 — 由定时器周期性触发重算。
+// 顺带清理过期的聚焦窗口(spec 017):focus.until 到点 → 清 focus,队列恢复全量。
 export function tickDefer() {
-  const { tasks } = getTasks()
+  const data = getTasks()
+  const { tasks } = data
   const now = Date.now()
   const due = tasks.some((t) => t.deferUntil && t.deferUntil <= now)
+  const focusExpired = data.focus && data.focus.until <= now
+  if (focusExpired) data.focus = null
   if (due) {
     for (const t of tasks) if (t.deferUntil && t.deferUntil <= now) t.deferUntil = null
+    notifyChange()
+  } else if (focusExpired) {
     notifyChange()
   } else if (shouldAutoReviveAll(tasks, now)) {
     // 没有到点的,但队列已空、只剩被推迟的 → 全部唤回(notifyChange 内做实际清空)
     notifyChange()
   }
+}
+
+// ── 聚焦窗口（spec 017）──
+// 手动圈选一批 task + 时长 → 窗口期只调度圈选的(+ waiting 破例)。只存一个,新建即替换。
+export function setFocus(taskIds = [], minutes = 120) {
+  const data = getTasks()
+  const now = Date.now()
+  data.focus = {
+    taskIds: [...taskIds],
+    until: now + minutes * 60 * 1000,
+    createdAt: now,
+  }
+  notifyChange()
+  return data.focus
+}
+
+export function clearFocus() {
+  const data = getTasks()
+  data.focus = null
+  notifyChange()
 }

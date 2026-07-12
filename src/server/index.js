@@ -22,6 +22,8 @@ import {
   undeferTask,
   dismissTask,
   tickDefer,
+  setFocus,
+  clearFocus,
 } from './tasks.js'
 import { startEvents } from './events.js'
 import { startScanner, countClaudeProcesses } from './scanner.js'
@@ -145,6 +147,20 @@ export function startServer({ port = 3890 } = {}) {
     const t = dismissTask(req.params.id)
     if (!t) return res.status(404).json({ error: 'not found' })
     res.json(t)
+  })
+
+  // ---- 聚焦窗口（spec 017）----
+  // POST 圈选一批 task + 时长(分钟)进入聚焦；DELETE 退出。窗口期只调度圈选的(+ waiting 破例)。
+  app.post('/api/focus', (req, res) => {
+    const { taskIds, minutes } = req.body || {}
+    if (!Array.isArray(taskIds) || taskIds.length === 0) {
+      return res.status(400).json({ error: 'taskIds required (non-empty array)' })
+    }
+    res.json(setFocus(taskIds, minutes ?? 120))
+  })
+  app.delete('/api/focus', (req, res) => {
+    clearFocus()
+    res.json({ ok: true })
   })
 
   // ---- 统计 / 全局视角 ----
