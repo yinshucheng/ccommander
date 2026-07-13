@@ -30,6 +30,27 @@ node bin/commander.js status              # 终端速查队列
 
 无 lint 配置。测试用 Node 内置 runner：`pnpm test`（= `node --test "test/**/*.test.mjs"`，测试文件后缀为 `.test.mjs`）。跑单个测试文件：`node --test test/scheduler.test.mjs`。验证靠：`pnpm test` 通过 + `pnpm build` 通过 + 浏览器实测 + `node -e` 直接 import server 模块跑函数。
 
+### 常驻服务（开机自启 + 崩溃自愈，macOS launchd）
+
+主端口 **3890** 由 macOS **launchd** 常驻守护：开机/登录自启、进程崩溃或被杀自动拉起、重启电脑后依旧在。配置在 `~/Library/LaunchAgents/com.commander.serve.plist`（不入库，属本机环境），直接 `exec node bin/commander.js serve --port 3890`（**不经 `start.sh`**——职责单一，让 launchd 精确盯住真正的 node 进程；`start.sh` 自己会 detach + 帮等杀进程，和 launchd 的 `KeepAlive` 会打架）。日志：`/tmp/commander-launchd.log`。
+
+```bash
+UID_NUM=$(id -u)
+launchctl bootstrap gui/$UID_NUM ~/Library/LaunchAgents/com.commander.serve.plist   # 起（加载并常驻）
+launchctl bootout   gui/$UID_NUM/com.commander.serve                                # 停（临时；不删 plist 则重启后仍自起）
+launchctl print     gui/$UID_NUM/com.commander.serve | grep -E "state|pid"          # 看状态
+# 彻底禁用开机自启：先 bootout，再 rm ~/Library/LaunchAgents/com.commander.serve.plist
+```
+
+**开发/调试别动 3890**——launchd 会一直占着它，手动 `./start.sh` 因幂等杀进程逻辑会和 launchd 来回抢。改后端调试时**换端口起**（与常驻服务互不干扰）：
+
+```bash
+./start.sh --port 3891 --no-open                    # 调试用 3891
+cd .worktrees/<slug> && ../../scripts/wt.sh serve   # 或 worktree 里自动分配 3891+ 端口
+```
+
+> ⚠️ **升级了 node 版本（asdf 装了新版）→ 必须改 plist**：`ProgramArguments` 和 `EnvironmentVariables.PATH` 里写死了 `nodejs/24.5.0` 的绝对路径（launchd 环境无你的 shell PATH，用 shim 不稳，故用 `installs/<版本>` 下的绝对路径）。换版本后同步改 plist 里的版本号，再 `bootout` + `bootstrap` 重载。
+
 ### ⚠️ 改后端必须重启 node 进程
 
 server 模块在进程启动时被缓存。**改 `src/server/*.js` 后只 `pnpm build` 不生效**,必须重启:
